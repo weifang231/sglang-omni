@@ -624,13 +624,14 @@ class UpdateQueueControlRequest(AdminRequestBase):
     scope: Literal["pipeline", "stage"] = "pipeline"
     discipline: Literal["fifo", "edf"] = "fifo"
     max_active_requests: int | None = Field(default=None, ge=0)
+    max_waiting_requests: int | None = Field(default=None, ge=0)
     class_limits: dict[str, int] = Field(default_factory=dict)
 
-    @field_validator("max_active_requests", mode="before")
+    @field_validator("max_active_requests", "max_waiting_requests", mode="before")
     @classmethod
-    def _validate_max_active_requests(cls, value: Any) -> Any:
+    def _validate_request_limits(cls, value: Any) -> Any:
         if isinstance(value, bool):
-            raise ValueError("max_active_requests must be a non-negative integer")
+            raise ValueError("request limits must be non-negative integers")
         return value
 
     @field_validator("class_limits", mode="before")

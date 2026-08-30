@@ -38,6 +38,7 @@ existing direct-dispatch path. A typical primary configuration is:
 queue_control:
   discipline: edf
   max_active_requests: 8
+  max_waiting_requests: 64
   trust_request_metadata: true
   class_limits:
     text: 1
@@ -62,6 +63,18 @@ not cancel active work. The multi-worker router does not expose this endpoint:
 cross-worker ordering, versioning, and configuration replay for newly registered
 workers need a separate consistency protocol before that surface is safe.
 
+`max_waiting_requests` bounds requests that have entered the runtime queue but
+have not acquired a credit; active requests do not consume this waiting budget.
+Lowering the bound does not evict accepted waiters; it rejects subsequent
+requests that cannot dispatch immediately until the waiting count is below the
+new bound.
+At pipeline scope, omitting it uses the native generation `max_in_flight` value
+as a safe default when that value is known. The native value remains an upper
+bound on active dispatch even if a larger runtime limit is requested. With no
+native bound, an omitted waiting limit is unbounded and should be set explicitly
+for production use. Default-off configurations retain the original behavior in
+which `max_in_flight` bounds all coordinator-owned requests.
+
 ## Observability and boundaries
 
 Queue snapshots expose the configured discipline and limits plus active/waiting
@@ -75,6 +88,12 @@ the engine's token-level batching policy. The stage extension counts requests,
 not outstanding chunks or bytes, and therefore is not an edge-flow-control
 implementation. In a multi-worker router deployment the coordinator credit pool
 is per worker rather than a globally shared cross-worker pool.
+
+An active abort releases the coordinator's logical credit after the abort
+broadcast is accepted by the transport. The current protocol has no per-stage
+termination acknowledgement, so residual device work can briefly overlap a
+successor after cancellation. Strict physical-WIP accounting across aborts
+requires an acknowledgement protocol and is not provided by this revision.
 
 On supported non-stream-receiver stages, the optional stage gate controls
 scheduler admission of the complete request payload. Stream-receiver stages

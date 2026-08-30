@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from sglang_omni.admission import QueueFullError
 from sglang_omni.runtime_queue import (
     FIRST_OUTPUT_DEADLINE_METADATA_KEY,
     REQUEST_CLASS_METADATA_KEY,
@@ -92,13 +93,74 @@ def test_runtime_queue_snapshot_schema() -> None:
     assert queue.snapshot() == {
         "discipline": "edf",
         "max_active_requests": 2,
+        "max_waiting_requests": None,
         "class_limits": {"text": 1},
         "trust_request_metadata": True,
         "active_requests": 1,
         "waiting_requests": 1,
         "active_by_class": {"text": 1},
         "waiting_by_class": {"text": 1},
+        "waiting_rejected_total": 0,
     }
+
+
+def test_waiting_limit_excludes_active_requests_and_rejects_only_new_waiters() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=1,
+        max_waiting_requests=2,
+    )
+
+    assert [item.request_id for item in queue.enqueue("active", "one", {})] == [
+        "active"
+    ]
+    assert queue.enqueue("waiting-1", "two", {}) == ()
+    assert queue.enqueue("waiting-2", "three", {}) == ()
+    with pytest.raises(QueueFullError):
+        queue.enqueue("rejected", "four", {})
+
+    snapshot = queue.snapshot()
+    assert snapshot["active_requests"] == 1
+    assert snapshot["waiting_requests"] == 2
+    assert snapshot["waiting_rejected_total"] == 1
+
+
+def test_full_waiting_queue_allows_an_immediately_dispatchable_class() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=2,
+        max_waiting_requests=1,
+        class_limits={"text": 1, "speech": 1},
+        trust_request_metadata=True,
+    )
+
+    assert queue.enqueue("text-active", "one", _metadata("text"))
+    assert queue.enqueue("text-waiting", "two", _metadata("text")) == ()
+    dispatched = queue.enqueue("speech-active", "three", _metadata("speech"))
+
+    assert [item.request_id for item in dispatched] == ["speech-active"]
+    assert queue.snapshot()["waiting_requests"] == 1
+
+
+def test_lowering_waiting_limit_does_not_evict_accepted_requests() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=1,
+        max_waiting_requests=2,
+    )
+    queue.enqueue("active", "one", {})
+    queue.enqueue("waiting-1", "two", {})
+    queue.enqueue("waiting-2", "three", {})
+
+    assert (
+        queue.update(
+            max_active_requests=1,
+            max_waiting_requests=1,
+            class_limits={},
+            discipline="fifo",
+        )
+        == ()
+    )
+    assert queue.snapshot()["waiting_requests"] == 2
+    with pytest.raises(QueueFullError):
+        queue.enqueue("rejected", "four", {})
 
 
 def test_class_limit_keys_are_normalized_like_request_metadata() -> None:
@@ -111,9 +173,11 @@ def test_class_limit_keys_are_normalized_like_request_metadata() -> None:
     assert queue.enqueue("r2", "two", _metadata("gold")) == ()
 
 
-def test_boolean_global_limit_is_rejected() -> None:
+def test_boolean_request_limits_are_rejected() -> None:
     with pytest.raises(ValueError, match="non-negative integer"):
         RuntimeCreditQueue[str](max_active_requests=False)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        RuntimeCreditQueue[str](max_active_requests=1, max_waiting_requests=False)
 
 
 def test_untrusted_request_metadata_is_ignored_by_default() -> None:

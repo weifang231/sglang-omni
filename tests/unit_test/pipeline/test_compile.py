@@ -123,6 +123,7 @@ def test_queue_control_schema_and_stage_spec_wiring(tmp_path) -> None:
     assert group.specs[0].queue_control == {
         "discipline": "fifo",
         "max_active_requests": 3,
+        "max_waiting_requests": None,
         "class_limits": {},
         "trust_request_metadata": False,
         "class_metadata_key": "sglang_omni.request_class",
@@ -133,6 +134,8 @@ def test_queue_control_schema_and_stage_spec_wiring(tmp_path) -> None:
         QueueControlConfig()
     with pytest.raises(ValueError, match="non-negative integer"):
         QueueControlConfig(max_active_requests=True)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        QueueControlConfig(max_active_requests=1, max_waiting_requests=True)
     with pytest.raises(ValueError, match="EDF requires"):
         QueueControlConfig(max_active_requests=1, discipline="edf")
     with pytest.raises(ValueError, match="non-default class limits require"):

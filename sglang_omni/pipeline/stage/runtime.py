@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 import torch
 
+from sglang_omni.admission import QueueFullError
 from sglang_omni.comm import stage_io
 from sglang_omni.comm.data_ref import DataKind, DataRef
 from sglang_omni.comm.engine import CommEngine
@@ -1001,7 +1002,7 @@ class Stage:
                     payload,
                     payload.request.metadata,
                 )
-            except ValueError as exc:
+            except (QueueFullError, ValueError) as exc:
                 await self._send_failure(request_id, str(exc))
                 return
             snapshot = self._runtime_queue.snapshot()
@@ -1251,8 +1252,12 @@ class Stage:
                     "discipline",
                     self._runtime_queue.discipline,
                 )
+                max_waiting_requests = payload.get("max_waiting_requests")
+                if max_waiting_requests is None:
+                    max_waiting_requests = self._runtime_queue.max_waiting_requests
                 dispatched = self._runtime_queue.update(
                     max_active_requests=max_active_requests,
+                    max_waiting_requests=max_waiting_requests,
                     class_limits=class_limits,
                     discipline=discipline,
                 )

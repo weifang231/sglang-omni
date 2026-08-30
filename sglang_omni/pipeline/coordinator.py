@@ -93,9 +93,11 @@ class Coordinator:
             replica_topology: Logical stage to expanded instance mapping.
             logical_process_plan: Compiled Process topology; the coordinator
                 selects one replica per replicated Process from it.
-            max_in_flight: If set, reject new submits once this many requests
-                are already tracked. Intended as generation capacity
-                (max_running_requests + max_queued_requests).
+            max_in_flight: Native generation capacity
+                (max_running_requests + max_queued_requests). Without runtime
+                queue control, reject new submits once this many requests are
+                tracked. With runtime queue control, bound active dispatch and
+                provide the default waiting-queue limit.
             queue_control: Optional runtime-owned FIFO/EDF queue with global
                 and per-class WIP credits. Credits are held from entry-stage
                 dispatch until the full request reaches a terminal state.
@@ -118,11 +120,31 @@ class Coordinator:
             if value < 0:
                 raise ValueError("max_in_flight must be >= 0")
             self.max_in_flight = value
-        self._runtime_queue: RuntimeCreditQueue[_PendingRequestDispatch] | None = (
-            None
-            if queue_control is None
-            else RuntimeCreditQueue.from_config(queue_control)
-        )
+        self._runtime_queue: RuntimeCreditQueue[_PendingRequestDispatch] | None = None
+        if queue_control is not None:
+            values = (
+                queue_control.model_dump()
+                if hasattr(queue_control, "model_dump")
+                else dict(queue_control)
+            )
+            # The native generation limit protects dispatched work. Runtime
+            # waiters live before that boundary and therefore need a separate
+            # bound instead of consuming max_in_flight slots.
+            if values.get("max_waiting_requests") is None:
+                values["max_waiting_requests"] = self.max_in_flight
+            configured_active = values.get("max_active_requests")
+            if self.max_in_flight is not None and (
+                configured_active is None or configured_active > self.max_in_flight
+            ):
+                if configured_active is not None:
+                    logger.warning(
+                        "Clamping queue_control.max_active_requests from %s to "
+                        "native max_in_flight=%s",
+                        configured_active,
+                        self.max_in_flight,
+                    )
+                values["max_active_requests"] = self.max_in_flight
+            self._runtime_queue = RuntimeCreditQueue.from_config(values)
         self._runtime_state_channel = RuntimeStateChannel(
             engine="sglang-omni",
             component="coordinator_queue",
@@ -450,7 +472,11 @@ class Coordinator:
         if self._request_id_is_reserved(request_id):
             raise ValueError(f"Request {request_id} already exists")
 
-        if self.max_in_flight is not None and len(self._requests) >= self.max_in_flight:
+        if (
+            self._runtime_queue is None
+            and self.max_in_flight is not None
+            and len(self._requests) >= self.max_in_flight
+        ):
             logger.warning(
                 "Rejecting request %s before pipeline submit: in-flight cap "
                 "(max_in_flight=%s)",
@@ -538,11 +564,32 @@ class Coordinator:
             await self._dispatch_submission(pending)
             return
 
-        dispatched = self._runtime_queue.enqueue(
-            request_id,
-            pending,
-            request.metadata,
-        )
+        try:
+            dispatched = self._runtime_queue.enqueue(
+                request_id,
+                pending,
+                request.metadata,
+            )
+        except QueueFullError:
+            self._requests.pop(request_id, None)
+            self._completion_futures.pop(request_id, None)
+            self._stream_queues.pop(request_id, None)
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage="coordinator",
+                event_name="runtime_queue_rejected",
+                metadata={
+                    "scope": "pipeline",
+                    "request_class": request_class,
+                    "reason": "waiting_queue_full",
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                    "max_waiting_requests": snapshot["max_waiting_requests"],
+                },
+            )
+            self._publish_runtime_queue_snapshot(force=True)
+            raise
         snapshot = self._runtime_queue.snapshot()
         _emit_event(
             request_id=request_id,
@@ -744,8 +791,22 @@ class Coordinator:
         values.setdefault(
             "deadline_metadata_key", self._runtime_queue.deadline_metadata_key
         )
+        if values.get("max_waiting_requests") is None:
+            values["max_waiting_requests"] = self._runtime_queue.max_waiting_requests
         # Trust is a startup-time boundary, not a live scheduling knob.
         values["trust_request_metadata"] = self._runtime_queue.trust_request_metadata
+        configured_active = values.get("max_active_requests")
+        if self.max_in_flight is not None and (
+            configured_active is None or configured_active > self.max_in_flight
+        ):
+            if configured_active is not None:
+                logger.warning(
+                    "Clamping live queue-control max_active_requests from %s to "
+                    "native max_in_flight=%s",
+                    configured_active,
+                    self.max_in_flight,
+                )
+            values["max_active_requests"] = self.max_in_flight
         replacement = RuntimeCreditQueue.from_config(values)
         if (
             replacement.class_metadata_key != self._runtime_queue.class_metadata_key
@@ -759,6 +820,7 @@ class Coordinator:
             )
         dispatched = self._runtime_queue.update(
             max_active_requests=replacement.max_active_requests,
+            max_waiting_requests=replacement.max_waiting_requests,
             class_limits=replacement.class_limits,
             discipline=replacement.discipline,
         )
@@ -846,9 +908,12 @@ class Coordinator:
         if queued_only:
             cancellation = self._runtime_queue.cancel(request_id)
         else:
-            # Keep the credit held until the abort has reached the stages. If
-            # broadcasting fails, releasing first could dispatch a successor
-            # while the original request is still running and orphan its slot.
+            # A successful PUB send proves transport acceptance, not that every
+            # stage has quiesced. We retain the existing logical-credit behavior
+            # here; deployments requiring a strict physical-WIP bound across
+            # cancellation need an explicit stage-termination acknowledgement.
+            # If publishing itself fails, retain the credit rather than orphaning
+            # the slot and dispatching a successor immediately.
             await self.control_plane.broadcast_abort(
                 AbortMessage(request_id=request_id)
             )

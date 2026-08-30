@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import sglang_omni.platforms as platforms
+from sglang_omni.admission import QueueFullError
 from sglang_omni.comm import stage_io
 from sglang_omni.comm.data_ref import DataRef, TransportKind
 from sglang_omni.pipeline.local_dispatch import LocalStageDispatcher
@@ -74,6 +75,37 @@ def test_stage_runtime_queue_enforces_credit_and_edf_dispatch() -> None:
         stage._release_runtime_credit("active", status="completed")
         assert scheduler.inbox.get_nowait().request_id == "early"
         assert scheduler.inbox.empty()
+
+    asyncio.run(_run())
+
+
+def test_stage_runtime_queue_rejects_when_waiting_budget_is_full() -> None:
+    async def _run() -> None:
+        scheduler = FakeScheduler()
+        stage = make_stage(
+            scheduler=scheduler,
+            queue_control={
+                "max_active_requests": 1,
+                "max_waiting_requests": 1,
+            },
+        )
+
+        await stage._execute(make_stage_payload(request_id="active"))
+        await stage._execute(make_stage_payload(request_id="waiting"))
+        await stage._execute(make_stage_payload(request_id="rejected"))
+
+        assert scheduler.inbox.get_nowait().request_id == "active"
+        assert scheduler.inbox.empty()
+        assert len(stage.control_plane.completions) == 1
+        failure = stage.control_plane.completions[0]
+        assert failure.request_id == "rejected"
+        assert failure.success is False
+        assert failure.error == QueueFullError.MESSAGE
+        assert stage._runtime_queue is not None
+        snapshot = stage._runtime_queue.snapshot()
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 1
+        assert snapshot["waiting_rejected_total"] == 1
 
     asyncio.run(_run())
 

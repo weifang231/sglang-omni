@@ -177,18 +177,17 @@ class QueueControlConfig(BaseModel):
 
     discipline: Literal["fifo", "edf"] = "fifo"
     max_active_requests: int | None = Field(default=None, ge=0)
+    max_waiting_requests: int | None = Field(default=None, ge=0)
     class_limits: dict[str, int] = Field(default_factory=dict)
     trust_request_metadata: bool = False
     class_metadata_key: str = "sglang_omni.request_class"
     deadline_metadata_key: str = "sglang_omni.first_output_deadline_unix_s"
 
-    @field_validator("max_active_requests", mode="before")
+    @field_validator("max_active_requests", "max_waiting_requests", mode="before")
     @classmethod
-    def _validate_max_active_requests(cls, value: Any) -> Any:
+    def _validate_request_limits(cls, value: Any) -> Any:
         if isinstance(value, bool):
-            raise ValueError(
-                "queue_control.max_active_requests must be a non-negative integer"
-            )
+            raise ValueError("queue-control limits must be non-negative integers")
         return value
 
     @field_validator("class_limits", mode="before")

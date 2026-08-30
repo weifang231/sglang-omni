@@ -816,6 +816,7 @@ def test_admin_routes_forward_to_client() -> None:
             "scope": "pipeline",
             "discipline": "edf",
             "max_active_requests": 8,
+            "max_waiting_requests": 64,
             "class_limits": {"text": 1, "speech": 7},
             "timeout_s": 7,
         },
@@ -849,6 +850,7 @@ def test_admin_routes_forward_to_client() -> None:
                 "scope": "pipeline",
                 "discipline": "edf",
                 "max_active_requests": 8,
+                "max_waiting_requests": 64,
                 "class_limits": {"text": 1, "speech": 7},
             },
             None,
@@ -896,6 +898,7 @@ def test_queue_control_admin_rejects_empty_or_misspelled_limits(payload) -> None
     "payload",
     [
         {"max_active_requests": True},
+        {"max_active_requests": 1, "max_waiting_requests": True},
         {"class_limits": {"speech": False}},
     ],
 )
@@ -931,6 +934,7 @@ def test_queue_control_admin_preserves_null_global_limit_for_stage_scope() -> No
                 "scope": "stage",
                 "discipline": "edf",
                 "max_active_requests": None,
+                "max_waiting_requests": None,
                 "class_limits": {"speech": 4},
             },
             ["talker_ar"],

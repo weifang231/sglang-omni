@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
+from sglang_omni.admission import QueueFullError
+
 REQUEST_CLASS_METADATA_KEY = "sglang_omni.request_class"
 FIRST_OUTPUT_DEADLINE_METADATA_KEY = "sglang_omni.first_output_deadline_unix_s"
 DEFAULT_REQUEST_CLASS = "default"
@@ -44,13 +46,16 @@ class RuntimeCreditQueue(Generic[ItemT]):
 
     A request acquires one global credit and, when configured, one credit for
     its class. Decreasing a limit never preempts active work; it only prevents
-    new dispatches until the active count falls below the new limit.
+    new dispatches until the active count falls below the new limit. Decreasing
+    the waiting limit does not evict accepted waiters; it rejects new requests
+    that would have to wait until the queue falls below the new limit.
     """
 
     def __init__(
         self,
         *,
         max_active_requests: int | None = None,
+        max_waiting_requests: int | None = None,
         class_limits: Mapping[str, int] | None = None,
         discipline: QueueDiscipline = "fifo",
         trust_request_metadata: bool = False,
@@ -61,6 +66,11 @@ class RuntimeCreditQueue(Generic[ItemT]):
             max_active_requests,
             class_limits or {},
         )
+        if isinstance(max_waiting_requests, bool) or (
+            max_waiting_requests is not None
+            and (not isinstance(max_waiting_requests, int) or max_waiting_requests < 0)
+        ):
+            raise ValueError("max_waiting_requests must be a non-negative integer")
         if discipline not in {"fifo", "edf"}:
             raise ValueError("discipline must be 'fifo' or 'edf'")
         if not isinstance(trust_request_metadata, bool):
@@ -83,6 +93,7 @@ class RuntimeCreditQueue(Generic[ItemT]):
             raise ValueError("deadline_metadata_key must not be empty")
 
         self.max_active_requests = max_active_requests
+        self.max_waiting_requests = max_waiting_requests
         self.class_limits = normalized_class_limits
         self.discipline: QueueDiscipline = discipline
         self.trust_request_metadata = trust_request_metadata
@@ -92,6 +103,7 @@ class RuntimeCreditQueue(Generic[ItemT]):
         self._active: dict[str, RuntimeQueueItem[ItemT]] = {}
         self._active_by_class: Counter[str] = Counter()
         self._sequence = 0
+        self._waiting_rejected_total = 0
 
     @classmethod
     def from_config(cls, config: Any) -> RuntimeCreditQueue[Any]:
@@ -140,6 +152,14 @@ class RuntimeCreditQueue(Generic[ItemT]):
             raise ValueError(f"request {request_id!r} is already queued or active")
 
         request_class, deadline_unix_s = self._parse_metadata(metadata)
+        if (
+            self.max_waiting_requests is not None
+            and len(self._waiting) >= self.max_waiting_requests
+            and not self._can_dispatch_immediately(request_class)
+        ):
+            self._waiting_rejected_total += 1
+            raise QueueFullError()
+
         item = RuntimeQueueItem(
             request_id=request_id,
             value=value,
@@ -189,6 +209,7 @@ class RuntimeCreditQueue(Generic[ItemT]):
         max_active_requests: int | None,
         class_limits: Mapping[str, int],
         discipline: QueueDiscipline,
+        max_waiting_requests: int | None = None,
     ) -> tuple[RuntimeQueueItem[ItemT], ...]:
         normalized_class_limits = self._normalize_limits(
             max_active_requests,
@@ -196,6 +217,13 @@ class RuntimeCreditQueue(Generic[ItemT]):
         )
         if discipline not in {"fifo", "edf"}:
             raise ValueError("discipline must be 'fifo' or 'edf'")
+        if max_waiting_requests is None:
+            max_waiting_requests = self.max_waiting_requests
+        if isinstance(max_waiting_requests, bool) or (
+            max_waiting_requests is not None
+            and (not isinstance(max_waiting_requests, int) or max_waiting_requests < 0)
+        ):
+            raise ValueError("max_waiting_requests must be a non-negative integer")
         if not self.trust_request_metadata and discipline == "edf":
             raise ValueError(
                 "EDF requires trust_request_metadata=true because deadlines "
@@ -209,6 +237,7 @@ class RuntimeCreditQueue(Generic[ItemT]):
                 "non-default class limits require trust_request_metadata=true"
             )
         self.max_active_requests = max_active_requests
+        self.max_waiting_requests = max_waiting_requests
         self.class_limits = normalized_class_limits
         self.discipline = discipline
         return self._drain()
@@ -231,13 +260,25 @@ class RuntimeCreditQueue(Generic[ItemT]):
         return {
             "discipline": self.discipline,
             "max_active_requests": self.max_active_requests,
+            "max_waiting_requests": self.max_waiting_requests,
             "class_limits": dict(self.class_limits),
             "trust_request_metadata": self.trust_request_metadata,
             "active_requests": len(self._active),
             "waiting_requests": len(self._waiting),
             "active_by_class": dict(self._active_by_class),
             "waiting_by_class": dict(waiting_by_class),
+            "waiting_rejected_total": self._waiting_rejected_total,
         }
+
+    def _can_dispatch_immediately(self, request_class: str) -> bool:
+        """Return whether a new request can acquire a credit without waiting.
+
+        The queue is drained after every state transition, so an available
+        global and class credit cannot be owed to an older eligible waiter.
+        """
+        return self._global_credit_available() and self._class_credit_available(
+            request_class
+        )
 
     def _drain(self) -> tuple[RuntimeQueueItem[ItemT], ...]:
         dispatched: list[RuntimeQueueItem[ItemT]] = []

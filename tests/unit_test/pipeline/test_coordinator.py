@@ -811,6 +811,77 @@ def test_coordinator_rejects_submit_when_in_flight_cap_is_reached() -> None:
     asyncio.run(_run())
 
 
+def test_runtime_waiters_do_not_consume_native_dispatch_capacity() -> None:
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            max_in_flight=2,
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = RecordingCoordinatorControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("active", "one")
+        await coordinator._submit_request("waiting-1", "two")
+        await coordinator._submit_request("waiting-2", "three")
+
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == ["active"]
+        snapshot = coordinator.health()["queue_control"]
+        assert snapshot["max_active_requests"] == 1
+        assert snapshot["max_waiting_requests"] == 2
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 2
+
+        with pytest.raises(QueueFullError, match="The request queue is full"):
+            await coordinator._submit_request("rejected", "four")
+        assert "rejected" not in coordinator._requests
+        assert "rejected" not in coordinator._completion_futures
+        assert coordinator.health()["queue_control"]["waiting_rejected_total"] == 1
+
+        await coordinator._handle_completion(
+            CompleteMessage("active", "preprocess", True, result={})
+        )
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "active",
+            "waiting-1",
+        ]
+        await coordinator.abort("waiting-1")
+        await coordinator.abort("waiting-2")
+
+    asyncio.run(_run())
+
+
+def test_runtime_active_limit_is_clamped_to_native_dispatch_capacity() -> None:
+    coordinator = Coordinator(
+        "inproc://complete",
+        "inproc://abort",
+        entry_stage="preprocess",
+        max_in_flight=2,
+        queue_control=QueueControlConfig(
+            max_active_requests=8,
+            max_waiting_requests=4,
+        ),
+    )
+
+    snapshot = coordinator.health()["queue_control"]
+    assert snapshot["max_active_requests"] == 2
+    assert snapshot["max_waiting_requests"] == 4
+
+    snapshot = asyncio.run(
+        coordinator.update_queue_control(
+            QueueControlConfig(
+                max_active_requests=16,
+                max_waiting_requests=8,
+            )
+        )
+    )
+    assert snapshot["max_active_requests"] == 2
+    assert snapshot["max_waiting_requests"] == 8
+
+
 def test_coordinator_runtime_queue_enforces_class_credits_and_edf() -> None:
     async def _run() -> None:
         coordinator = Coordinator(
