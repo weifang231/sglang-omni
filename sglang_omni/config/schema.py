@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -164,6 +164,91 @@ class PlacementConfig(BaseModel):
     require_memory_fraction_for_colocation: bool = True
 
 
+class QueueControlConfig(BaseModel):
+    """Optional runtime-owned request queue and WIP-credit policy.
+
+    On ``PipelineConfig`` a credit is held from entry-stage dispatch through
+    terminal completion. On ``StageConfig`` it is held only while the request
+    is inside that stage's scheduler. Omitting the block preserves the stock
+    direct-dispatch behavior.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    discipline: Literal["fifo", "edf"] = "fifo"
+    max_active_requests: int | None = Field(default=None, ge=0)
+    class_limits: dict[str, int] = Field(default_factory=dict)
+    trust_request_metadata: bool = False
+    class_metadata_key: str = "sglang_omni.request_class"
+    deadline_metadata_key: str = "sglang_omni.first_output_deadline_unix_s"
+
+    @field_validator("max_active_requests", mode="before")
+    @classmethod
+    def _validate_max_active_requests(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError(
+                "queue_control.max_active_requests must be a non-negative integer"
+            )
+        return value
+
+    @field_validator("class_limits", mode="before")
+    @classmethod
+    def _validate_class_limits(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for request_class, limit in value.items():
+            if not isinstance(request_class, str) or not request_class.strip():
+                raise ValueError("queue_control.class_limits keys must not be empty")
+            if isinstance(limit, bool):
+                raise ValueError(
+                    "queue_control.class_limits values must be non-negative integers"
+                )
+        return value
+
+    @field_validator("class_limits")
+    @classmethod
+    def _validate_normalized_class_limits(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(limit < 0 for limit in value.values()):
+            raise ValueError(
+                "queue_control.class_limits values must be non-negative integers"
+            )
+        normalized: dict[str, int] = {}
+        for request_class, limit in value.items():
+            request_class = request_class.strip()
+            if request_class in normalized:
+                raise ValueError(
+                    "queue_control.class_limits keys must remain unique after "
+                    "trimming whitespace"
+                )
+            normalized[request_class] = limit
+        return normalized
+
+    @field_validator("class_metadata_key", "deadline_metadata_key")
+    @classmethod
+    def _validate_metadata_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("queue-control metadata keys must not be empty")
+        return value
+
+    def model_post_init(self, __context: Any = None) -> None:
+        if self.max_active_requests is None and not self.class_limits:
+            raise ValueError(
+                "queue_control requires max_active_requests or class_limits"
+            )
+        if not self.trust_request_metadata and self.discipline == "edf":
+            raise ValueError(
+                "queue_control EDF requires trust_request_metadata=true"
+            )
+        if not self.trust_request_metadata and any(
+            request_class != "default" for request_class in self.class_limits
+        ):
+            raise ValueError(
+                "queue_control non-default class limits require "
+                "trust_request_metadata=true"
+            )
+
+
 # Note (kaige): validation follows the context each layer owns. StageConfig and
 # ProcessConfig check object-local fields, PipelineConfig checks declarations
 # and references, and logical-process compilation checks derived topology once
@@ -277,6 +362,7 @@ class StageConfig(BaseModel):
     # --- Consumer groups ---
     engine: EngineArgs | None = None
     factory: FactoryArgs = Field(default_factory=FactoryArgs)
+    queue_control: QueueControlConfig | None = None
 
     # Note (Yueying Li): per-stage env defaults applied in this stage's worker process at spawn
     # (merged over the pipeline-level env_defaults; never overrides os.environ).
@@ -462,6 +548,7 @@ class PipelineConfig(BaseModel):
     placement: PlacementConfig = Field(default_factory=PlacementConfig)
     placement_policy: str | None = None
     endpoints: EndpointsConfig = Field(default_factory=EndpointsConfig)
+    queue_control: QueueControlConfig | None = None
     terminal_stages_fn: str | None = None
     config_cls: str | None = None
 

@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from sglang_omni.config.schema import EndpointsConfig, PipelineConfig
+from sglang_omni.config.schema import (
+    EndpointsConfig,
+    PipelineConfig,
+    QueueControlConfig,
+)
 from sglang_omni.pipeline.mp_runner import (
     _build_stage_groups,
     _resolve_same_process_targets,
@@ -81,6 +85,58 @@ def test_pipeline_schema_keeps_topology_and_validation_contracts() -> None:
                 )
             ],
         )
+
+
+def test_queue_control_schema_and_stage_spec_wiring(tmp_path) -> None:
+    config = PipelineConfig(
+        model_path="model",
+        queue_control=QueueControlConfig(
+            max_active_requests=8,
+            class_limits={"text": 1, "speech": 7},
+            discipline="edf",
+            trust_request_metadata=True,
+        ),
+        endpoints=EndpointsConfig(base_path=str(tmp_path)),
+        stages=[
+            stage(
+                "preprocess",
+                terminal=True,
+                queue_control=QueueControlConfig(max_active_requests=3),
+            )
+        ],
+    )
+    prep = prepare_pipeline_runtime(config)
+    try:
+        group = _build_stage_groups(
+            config,
+            ctx=FakeMpContext(),
+            stages_cfg=prep.stages_cfg,
+            endpoints=prep.endpoints,
+            placement_plan=prep.placement_plan,
+            process_plan=prep.process_plan,
+        )[0]
+    finally:
+        assert prep.runtime_dir is not None
+        prep.runtime_dir.close()
+
+    assert config.queue_control.class_limits == {"text": 1, "speech": 7}
+    assert group.specs[0].queue_control == {
+        "discipline": "fifo",
+        "max_active_requests": 3,
+        "class_limits": {},
+        "trust_request_metadata": False,
+        "class_metadata_key": "sglang_omni.request_class",
+        "deadline_metadata_key": "sglang_omni.first_output_deadline_unix_s",
+    }
+
+    with pytest.raises(ValueError, match="requires max_active_requests"):
+        QueueControlConfig()
+    with pytest.raises(ValueError, match="non-negative integer"):
+        QueueControlConfig(max_active_requests=True)
+    with pytest.raises(ValueError, match="EDF requires"):
+        QueueControlConfig(max_active_requests=1, discipline="edf")
+    with pytest.raises(ValueError, match="non-default class limits require"):
+        QueueControlConfig(class_limits={"speech": 1})
 
 
 class _KwargSeedingPipelineConfig(PipelineConfig):

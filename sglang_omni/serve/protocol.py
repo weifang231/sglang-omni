@@ -8,7 +8,14 @@ import binascii
 import math
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class UsageResponse(BaseModel):
@@ -97,6 +104,7 @@ class ChatCompletionRequest(BaseModel):
     # Misc
     request_id: str | None = None
     user: str | None = None
+    metadata: dict[str, Any] | None = None
 
     @property
     def effective_max_tokens(self) -> int | None:
@@ -366,6 +374,7 @@ class CreateSpeechRequest(BaseModel):
 
     # Per-stage overrides (sglang-omni specific)
     stage_params: dict[str, dict[str, Any]] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SpeechBatchItem(BaseModel):
@@ -399,6 +408,7 @@ class SpeechBatchItem(BaseModel):
     repetition_penalty: Any = None
     seed: Any = None
     stage_params: Any = None
+    metadata: Any = None
 
 
 class CreateSpeechBatchRequest(BaseModel):
@@ -432,6 +442,7 @@ class CreateSpeechBatchRequest(BaseModel):
     repetition_penalty: float | None = None
     seed: int | None = None
     stage_params: dict[str, dict[str, Any]] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SpeechBatchResult(BaseModel):
@@ -603,6 +614,41 @@ class PauseGenerationRequest(AdminRequestBase):
 
 class ContinueGenerationRequest(AdminRequestBase):
     torch_empty_cache: bool = True
+
+
+class UpdateQueueControlRequest(AdminRequestBase):
+    """Replace pipeline- or stage-level runtime queue credits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["pipeline", "stage"] = "pipeline"
+    discipline: Literal["fifo", "edf"] = "fifo"
+    max_active_requests: int | None = Field(default=None, ge=0)
+    class_limits: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("max_active_requests", mode="before")
+    @classmethod
+    def _validate_max_active_requests(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("max_active_requests must be a non-negative integer")
+        return value
+
+    @field_validator("class_limits", mode="before")
+    @classmethod
+    def _validate_class_limits(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(
+            isinstance(limit, bool) for limit in value.values()
+        ):
+            raise ValueError("class_limits values must be non-negative integers")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> UpdateQueueControlRequest:
+        if self.max_active_requests is None and not self.class_limits:
+            raise ValueError(
+                "update_queue_control requires max_active_requests or class_limits"
+            )
+        return self
 
 
 class UpdateWeightFromDiskRequest(AdminRequestBase):

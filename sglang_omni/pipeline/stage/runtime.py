@@ -15,9 +15,11 @@ import logging
 import os
 import queue as _queue_mod
 import threading
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Literal
 
 import torch
 
@@ -50,7 +52,9 @@ from sglang_omni.proto import (
     SubmitMessage,
 )
 from sglang_omni.relay.base import Relay
+from sglang_omni.runtime_queue import RuntimeCreditQueue, RuntimeQueueItem
 from sglang_omni.scheduling.messages import IncomingMessage
+from sglang_omni.utils.runtime_state import RuntimeStateChannel
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,7 @@ class Stage:
         input_handler: InputHandler | None = None,
         relay: Relay | None = None,
         comm_config: dict[str, Any] | None = None,
+        queue_control: dict[str, Any] | None = None,
         scheduler: Any = None,
         project_payload: dict[str, Callable[[Any], Any]] | None = None,
         stream_targets: list[str] | None = None,
@@ -120,6 +125,10 @@ class Stage:
         self.control_plane = control_plane
         self.input_handler = input_handler or DirectInput()
         self.scheduler = scheduler
+        if scheduler is not None:
+            set_runtime_stage_id = getattr(scheduler, "set_runtime_stage_id", None)
+            if callable(set_runtime_stage_id):
+                set_runtime_stage_id(name)
         self._project_payload = project_payload or {}
         self._stream_targets = stream_targets or []
         self.get_stream_done_targets = get_stream_done_targets
@@ -130,6 +139,20 @@ class Stage:
         self._tp_fanout = tp_fanout
         self._is_terminal = is_terminal
         self._owns_external_io = role in {"single", "leader"}
+        self._runtime_queue: RuntimeCreditQueue[Any] | None = (
+            RuntimeCreditQueue.from_config(queue_control)
+            if queue_control is not None and self._owns_external_io
+            else None
+        )
+        self._runtime_queue_state_channel: RuntimeStateChannel | None = (
+            RuntimeStateChannel(
+                engine="sglang-omni",
+                component="stage_queue",
+                stage_id=name,
+            )
+            if self._runtime_queue is not None
+            else None
+        )
         self._replica_topology = ReplicaTopology.from_dict(replica_topology)
         self._replica_bindings: dict[str, dict[str, int]] = {}
 
@@ -749,9 +772,7 @@ class Stage:
         if self._open_pre_payload_stream_if_allowed(request_id):
             self._route_stream_item(request_id, item)
             return
-        with suppress(Exception):
-            self.scheduler.abort(request_id)
-        await self._send_failure(
+        await self._abort_scheduler_and_send_failure(
             request_id,
             (
                 f"Stage {self.name}: stream chunk from {item.from_stage!r} arrived "
@@ -775,9 +796,31 @@ class Stage:
             request_id,
             error,
         )
-        with suppress(Exception):
+        await self._abort_scheduler_and_send_failure(request_id, str(error))
+
+    async def _abort_scheduler_and_send_failure(
+        self,
+        request_id: str,
+        error: str,
+    ) -> None:
+        release_runtime_credit = True
+        try:
             self.scheduler.abort(request_id)
-        await self._send_failure(request_id, str(error))
+        except Exception:
+            logger.exception(
+                "Stage %s: scheduler abort failed for %s; retaining credit",
+                self.name,
+                request_id,
+            )
+            release_runtime_credit = not (
+                self._runtime_queue is not None
+                and self._runtime_queue.is_active(request_id)
+            )
+        await self._send_failure(
+            request_id,
+            error,
+            release_runtime_credit=release_runtime_credit,
+        )
 
     def _data_ref_from_message(self, msg: DataReadyMessage) -> DataRef:
         if msg.data_ref is None:
@@ -923,12 +966,11 @@ class Stage:
             self._stream_queue.put_done(
                 request_id, from_stage=self._logical_source(from_stage)
             )
-            self.scheduler.inbox.put(
-                IncomingMessage(
-                    request_id=request_id,
-                    type="stream_done",
-                )
+            message = IncomingMessage(
+                request_id=request_id,
+                type="stream_done",
             )
+            self.scheduler.inbox.put(message)
 
     def _open_pre_payload_stream_if_allowed(self, request_id: str) -> bool:
         if self._stream_queue is None:
@@ -942,14 +984,46 @@ class Stage:
         return True
 
     def _route_stream_item(self, request_id: str, item: StreamItem) -> None:
-        self.scheduler.inbox.put(
-            IncomingMessage(request_id=request_id, type="stream_chunk", data=item)
-        )
+        message = IncomingMessage(request_id=request_id, type="stream_chunk", data=item)
+        self.scheduler.inbox.put(message)
 
     async def _execute(self, payload: Any) -> None:
         request_id = payload.request_id
         if request_id in self._aborted:
             return
+        if self._runtime_queue is not None:
+            try:
+                request_class, deadline_unix_s = self._runtime_queue.attributes(
+                    payload.request.metadata
+                )
+                dispatched = self._runtime_queue.enqueue(
+                    request_id,
+                    payload,
+                    payload.request.metadata,
+                )
+            except ValueError as exc:
+                await self._send_failure(request_id, str(exc))
+                return
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage=self.name,
+                event_name="runtime_queue_enter",
+                metadata={
+                    "scope": "stage",
+                    "request_class": request_class,
+                    "first_output_deadline_unix_s": deadline_unix_s,
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
+            self._dispatch_runtime_items(dispatched)
+            self._publish_runtime_queue_snapshot()
+            return
+        self._dispatch_payload(payload)
+
+    def _dispatch_payload(self, payload: Any) -> None:
+        request_id = payload.request_id
         _emit_event(
             request_id=request_id,
             stage=self.name,
@@ -967,6 +1041,149 @@ class Stage:
             enqueue(msg)
         else:
             self.scheduler.inbox.put(msg)
+
+    def _dispatch_runtime_items(
+        self, items: list[RuntimeQueueItem[Any]] | tuple[RuntimeQueueItem[Any], ...]
+    ) -> None:
+        if self._runtime_queue is None:
+            return
+        pending_items = list(items)
+        while pending_items:
+            item = pending_items.pop(0)
+            if item.request_id in self._aborted:
+                cancelled = self._runtime_queue.cancel(item.request_id)
+                pending_items.extend(cancelled.dispatched)
+                continue
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=item.request_id,
+                stage=self.name,
+                event_name="runtime_credit_acquired",
+                metadata={
+                    "scope": "stage",
+                    "request_class": item.request_class,
+                    "first_output_deadline_unix_s": item.deadline_unix_s,
+                    "queue_wait_ms": (time.monotonic_ns() - item.enqueued_ns) / 1e6,
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
+            try:
+                self._dispatch_payload(item.value)
+            except Exception as exc:
+                logger.exception(
+                    "Stage %s: failed to dispatch queued request %s",
+                    self.name,
+                    item.request_id,
+                )
+                if (
+                    self.role == "leader"
+                    and self._tp_fanout is not None
+                    and getattr(self.scheduler, "requires_tp_work_fanout", False)
+                ):
+                    # fanout_work may have reached only a subset of followers.
+                    # The leader cannot safely release credits or start another
+                    # collective, so fail-stop this stage instead.
+                    failure_task = asyncio.create_task(
+                        self._handle_scheduler_crash(exc),
+                        name=f"{self.name}-tp-dispatch-failure",
+                    )
+                    self._receive_tasks.add(failure_task)
+                    failure_task.add_done_callback(self._receive_tasks.discard)
+                    failure_task.add_done_callback(
+                        lambda done: self._on_background_task_done(
+                            done,
+                            "TP dispatch failure cleanup",
+                        )
+                    )
+                    return
+                cancellation = self._runtime_queue.cancel(item.request_id)
+                self._record_aborted_request_id(item.request_id)
+                self._comm.cleanup(item.request_id)
+                self._clear_request_state(item.request_id)
+                if cancellation.item is not None:
+                    snapshot = self._runtime_queue.snapshot()
+                    _emit_event(
+                        request_id=item.request_id,
+                        stage=self.name,
+                        event_name="runtime_credit_released",
+                        metadata={
+                            "scope": "stage",
+                            "request_class": item.request_class,
+                            "status": "dispatch_error",
+                            "active_requests": snapshot["active_requests"],
+                            "waiting_requests": snapshot["waiting_requests"],
+                        },
+                    )
+                pending_items.extend(cancellation.dispatched)
+                failure_task = asyncio.create_task(
+                    self.control_plane.send_complete(
+                        CompleteMessage(
+                            request_id=item.request_id,
+                            from_stage=self.name,
+                            success=False,
+                            error=str(exc),
+                        )
+                    ),
+                    name=f"{self.name}-dispatch-failure-{item.request_id}",
+                )
+                self._receive_tasks.add(failure_task)
+                failure_task.add_done_callback(self._receive_tasks.discard)
+                failure_task.add_done_callback(
+                    lambda done, request_id=item.request_id: self._on_background_task_done(
+                        done,
+                        f"dispatch failure response for {request_id}",
+                    )
+                )
+                continue
+        self._publish_runtime_queue_snapshot()
+
+    def _release_runtime_credit(self, request_id: str, *, status: str) -> None:
+        if self._runtime_queue is None:
+            return
+        released = self._runtime_queue.release(request_id)
+        if released is None:
+            cancellation = self._runtime_queue.cancel(request_id)
+            if cancellation.item is None:
+                return
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage=self.name,
+                event_name="runtime_queue_cancelled",
+                metadata={
+                    "scope": "stage",
+                    "request_class": cancellation.item.request_class,
+                    "status": status,
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
+            self._dispatch_runtime_items(cancellation.dispatched)
+            return
+        item, dispatched = released
+        snapshot = self._runtime_queue.snapshot()
+        _emit_event(
+            request_id=request_id,
+            stage=self.name,
+            event_name="runtime_credit_released",
+            metadata={
+                "scope": "stage",
+                "request_class": item.request_class,
+                "status": status,
+                "active_requests": snapshot["active_requests"],
+                "waiting_requests": snapshot["waiting_requests"],
+            },
+        )
+        self._dispatch_runtime_items(dispatched)
+
+    def _publish_runtime_queue_snapshot(self, *, force: bool = False) -> None:
+        if self._runtime_queue is None or self._runtime_queue_state_channel is None:
+            return
+        self._runtime_queue_state_channel.maybe_publish(
+            self._runtime_queue.snapshot,
+            force=force,
+        )
 
     async def _on_admin(self, msg: AdminMessage) -> None:
         operation = msg.operation
@@ -1012,6 +1229,41 @@ class Stage:
 
     async def _run_admin_operation(self, operation: Any) -> AdminResult:
         try:
+            action = operation.action
+            payload = dict(operation.payload)
+            if action == "update_queue_control":
+                if self._runtime_queue is None:
+                    return self._admin_result(
+                        operation,
+                        success=True,
+                        message="stage queue control is not configured",
+                        data={"skipped": True, "unsupported": True},
+                    )
+                max_active_requests = payload.get(
+                    "max_active_requests",
+                    self._runtime_queue.max_active_requests,
+                )
+                class_limits = payload.get(
+                    "class_limits",
+                    self._runtime_queue.class_limits,
+                )
+                discipline = payload.get(
+                    "discipline",
+                    self._runtime_queue.discipline,
+                )
+                dispatched = self._runtime_queue.update(
+                    max_active_requests=max_active_requests,
+                    class_limits=class_limits,
+                    discipline=discipline,
+                )
+                self._dispatch_runtime_items(dispatched)
+                self._publish_runtime_queue_snapshot(force=True)
+                return self._admin_result(
+                    operation,
+                    success=True,
+                    message="stage queue control updated",
+                    data=self._runtime_queue.snapshot(),
+                )
             handler = getattr(self.scheduler, "admin", None)
             if handler is None:
                 return self._admin_result(
@@ -1020,8 +1272,6 @@ class Stage:
                     message="stage does not support admin operations",
                     data={"skipped": True, "unsupported": True},
                 )
-            action = operation.action
-            payload = dict(operation.payload)
             loop = asyncio.get_running_loop()
             outcome = await loop.run_in_executor(None, lambda: handler(action, payload))
             if inspect.isawaitable(outcome):
@@ -1106,6 +1356,7 @@ class Stage:
             for batch_index in range(_OUTBOX_DRAIN_BATCH_SIZE):
                 if out.request_id in self._active_requests:
                     if out.type == "result":
+                        self._release_runtime_credit(out.request_id, status="completed")
                         await self._route_result(out.request_id, out.data)
                     elif out.type == "stream":
                         if out.target is None:
@@ -1135,7 +1386,21 @@ class Stage:
                                 out.metadata,
                             )
                     elif out.type == "error":
+                        self._release_runtime_credit(out.request_id, status="failed")
                         await self._send_failure(out.request_id, str(out.data))
+                elif (
+                    self._runtime_queue is not None
+                    and self._runtime_queue.is_active(out.request_id)
+                    and out.type in {"result", "error"}
+                ):
+                    # A scheduler abort hook may fail after the request was
+                    # tombstoned. Keep its credit until the scheduler actually
+                    # reports a terminal result, then unblock the queue without
+                    # routing stale output.
+                    self._release_runtime_credit(
+                        out.request_id,
+                        status="aborted_terminal",
+                    )
 
                 if batch_index + 1 >= _OUTBOX_DRAIN_BATCH_SIZE:
                     await asyncio.sleep(0)
@@ -1704,8 +1969,16 @@ class Stage:
         )
         await self.control_plane.send_stream(msg)
 
-    async def _send_failure(self, request_id: str, error: str) -> None:
+    async def _send_failure(
+        self,
+        request_id: str,
+        error: str,
+        *,
+        release_runtime_credit: bool = True,
+    ) -> None:
         self._record_aborted_request_id(request_id)
+        if release_runtime_credit:
+            self._release_runtime_credit(request_id, status="failed")
         if not self._owns_external_io:
             self._clear_request_state(request_id)
             raise RuntimeError(f"Follower stage {self.name} failed: {error}")
@@ -1738,6 +2011,8 @@ class Stage:
         if self._scheduler_crash_error is not None:
             return
         self._scheduler_crash_error = exc
+        if self._runtime_queue is not None:
+            self._runtime_queue.clear()
         if not self._owns_external_io:
             self.control_plane.close()
             return
@@ -1781,10 +2056,54 @@ class Stage:
             ids -= set(to_remove)
 
     def _on_abort(self, request_id: str) -> None:
+        if self._runtime_queue is None:
+            self._record_aborted_request_id(request_id)
+            self._comm.cleanup(request_id)
+            self._clear_request_state(request_id)
+            self.scheduler.abort(request_id)
+            return
+
+        queued_only = (
+            self._runtime_queue.is_waiting(request_id)
+        )
         self._record_aborted_request_id(request_id)
         self._comm.cleanup(request_id)
         self._clear_request_state(request_id)
-        self.scheduler.abort(request_id)
+        if not queued_only:
+            try:
+                self.scheduler.abort(request_id)
+            except Exception:
+                # The scheduler may still own live work. Retain its credit until
+                # a terminal outbox item proves that execution has ended.
+                logger.exception(
+                    "Stage %s: scheduler abort failed for %s; retaining credit",
+                    self.name,
+                    request_id,
+                )
+                self._publish_runtime_queue_snapshot(force=True)
+                return
+        cancellation = self._runtime_queue.cancel(request_id)
+        if cancellation.item is not None:
+            event_name = (
+                "runtime_credit_released"
+                if cancellation.was_active
+                else "runtime_queue_cancelled"
+            )
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage=self.name,
+                event_name=event_name,
+                metadata={
+                    "scope": "stage",
+                    "request_class": cancellation.item.request_class,
+                    "status": "aborted",
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
+        self._dispatch_runtime_items(cancellation.dispatched)
+        self._publish_runtime_queue_snapshot()
 
     def _on_profiler_start(self, msg: ProfilerStartMessage) -> None:
         run_id = msg.run_id

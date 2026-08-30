@@ -3,10 +3,11 @@
 
 import asyncio
 import logging
+import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, AsyncIterator
+from typing import Any
 
 from sglang_omni.admission import QueueFullError
 from sglang_omni.config.topology import LogicalProcessPlan
@@ -34,6 +35,8 @@ from sglang_omni.proto import (
     SubmitMessage,
     is_update_action,
 )
+from sglang_omni.runtime_queue import RuntimeCreditQueue, RuntimeQueueItem
+from sglang_omni.utils.runtime_state import RuntimeStateChannel
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,13 @@ class _AdminPendingOperation:
     action: str
     results: dict[str, AdminResult] = field(default_factory=dict)
     future: asyncio.Future | None = None
+
+
+@dataclass(frozen=True)
+class _PendingRequestDispatch:
+    entry_instance: str
+    entry_endpoint: str
+    message: SubmitMessage
 
 
 class Coordinator:
@@ -70,6 +80,7 @@ class Coordinator:
         logical_process_plan: LogicalProcessPlan | None = None,
         binding_policy: BindingPolicy | None = None,
         max_in_flight: int | None = None,
+        queue_control: Any | None = None,
     ):
         """Initialize coordinator.
 
@@ -85,6 +96,9 @@ class Coordinator:
             max_in_flight: If set, reject new submits once this many requests
                 are already tracked. Intended as generation capacity
                 (max_running_requests + max_queued_requests).
+            queue_control: Optional runtime-owned FIFO/EDF queue with global
+                and per-class WIP credits. Credits are held from entry-stage
+                dispatch until the full request reaches a terminal state.
         """
         self.entry_stage = entry_stage
         self._terminal_stages: set[str] = (
@@ -104,6 +118,17 @@ class Coordinator:
             if value < 0:
                 raise ValueError("max_in_flight must be >= 0")
             self.max_in_flight = value
+        self._runtime_queue: RuntimeCreditQueue[_PendingRequestDispatch] | None = (
+            None
+            if queue_control is None
+            else RuntimeCreditQueue.from_config(queue_control)
+        )
+        self._runtime_state_channel = RuntimeStateChannel(
+            engine="sglang-omni",
+            component="coordinator_queue",
+            stage_id="pipeline",
+        )
+        self._runtime_dispatch_lock = asyncio.Lock()
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -173,6 +198,8 @@ class Coordinator:
                 )
         self._requests.clear()
         self._partial_results.clear()
+        if self._runtime_queue is not None:
+            self._runtime_queue.clear()
 
     async def shutdown_stages(self) -> None:
         """Send shutdown signal to all registered stages."""
@@ -348,12 +375,23 @@ class Coordinator:
 
     async def submit(self, request_id: str, request: OmniRequest | Any) -> Any:
         """Submit a request to the pipeline and wait for completion."""
-        await self._submit_request(request_id, request)
-
-        future = self._completion_futures[request_id]
         try:
-            result = await future
-            return result
+            await self._submit_request(request_id, request)
+            future = self._completion_futures[request_id]
+            return await future
+        except asyncio.CancelledError:
+            if request_id in self._requests:
+                abort_task = asyncio.create_task(self.abort(request_id))
+                try:
+                    await asyncio.shield(abort_task)
+                except asyncio.CancelledError:
+                    await abort_task
+                except Exception:
+                    logger.exception(
+                        "Coordinator failed to abort cancelled submit req=%s",
+                        request_id,
+                    )
+            raise
         finally:
             self._completion_futures.pop(request_id, None)
 
@@ -458,34 +496,282 @@ class Coordinator:
             data={"raw_inputs": request.inputs},
         )
 
-        _emit_event(
-            request_id=request_id,
-            stage="coordinator",
-            event_name="request_admission",
-            metadata={"entry_stage": self.entry_stage},
-        )
-
-        await self.control_plane.submit_to_stage(
-            entry_instance,
-            entry_info.control_endpoint,
-            SubmitMessage(
+        pending = _PendingRequestDispatch(
+            entry_instance=entry_instance,
+            entry_endpoint=entry_info.control_endpoint,
+            message=SubmitMessage(
                 request_id=request_id,
                 data=payload,
                 replica_bindings=replica_bindings,
             ),
         )
 
-        # Update state
+        request_class = None
+        first_output_deadline_unix_s = None
+        if self._runtime_queue is not None:
+            try:
+                request_class, first_output_deadline_unix_s = (
+                    self._runtime_queue.attributes(request.metadata)
+                )
+            except Exception:
+                self._requests.pop(request_id, None)
+                self._completion_futures.pop(request_id, None)
+                self._stream_queues.pop(request_id, None)
+                raise
+            info = self._requests.get(request_id)
+            if info is not None:
+                info.request_class = request_class
+                info.first_output_deadline_unix_s = first_output_deadline_unix_s
+
+        _emit_event(
+            request_id=request_id,
+            stage="coordinator",
+            event_name="request_admission",
+            metadata={
+                "entry_stage": self.entry_stage,
+                "request_class": request_class,
+                "first_output_deadline_unix_s": first_output_deadline_unix_s,
+            },
+        )
+
+        if self._runtime_queue is None:
+            await self._dispatch_submission(pending)
+            return
+
+        dispatched = self._runtime_queue.enqueue(
+            request_id,
+            pending,
+            request.metadata,
+        )
+        snapshot = self._runtime_queue.snapshot()
+        _emit_event(
+            request_id=request_id,
+            stage="coordinator",
+            event_name="runtime_queue_enter",
+            metadata={
+                "scope": "pipeline",
+                "request_class": request_class,
+                "first_output_deadline_unix_s": first_output_deadline_unix_s,
+                "active_requests": snapshot["active_requests"],
+                "waiting_requests": snapshot["waiting_requests"],
+            },
+        )
+        await self._dispatch_runtime_items(dispatched)
+        self._publish_runtime_queue_snapshot()
+
+    async def _dispatch_submission(self, pending: _PendingRequestDispatch) -> None:
+        await self.control_plane.submit_to_stage(
+            pending.entry_instance,
+            pending.entry_endpoint,
+            pending.message,
+        )
+        request_id = pending.message.request_id
         info = self._requests.get(request_id)
         if info is not None:
             info.state = RequestState.RUNNING
-
         logger.info(
             "Coordinator submitted req=%s to %s at %s bindings=%s",
             request_id,
-            entry_instance,
-            entry_info.control_endpoint,
-            replica_bindings,
+            pending.entry_instance,
+            pending.entry_endpoint,
+            pending.message.replica_bindings,
+        )
+
+    async def _dispatch_runtime_items(
+        self,
+        items: Sequence[RuntimeQueueItem[_PendingRequestDispatch]],
+    ) -> None:
+        if not items:
+            return
+        # Queue transitions grant credits synchronously, before network sends.
+        # Serialize and shield the full granted batch so a concurrent release or
+        # caller cancellation cannot reorder or orphan already-active items.
+        # A control-plane caller (for example, a live policy update) does not own
+        # the user requests it happens to dispatch, so its cancellation must not
+        # cancel a stage send or abort an unrelated request.
+        dispatch_task = asyncio.create_task(
+            self._dispatch_runtime_items_locked(items),
+            name="coordinator-runtime-queue-dispatch",
+        )
+        try:
+            await asyncio.shield(dispatch_task)
+        except asyncio.CancelledError:
+            await dispatch_task
+            raise
+
+    async def _dispatch_runtime_items_locked(
+        self,
+        items: Sequence[RuntimeQueueItem[_PendingRequestDispatch]],
+    ) -> None:
+        async with self._runtime_dispatch_lock:
+            await self._dispatch_runtime_items_unlocked(items)
+
+    async def _dispatch_runtime_items_unlocked(
+        self,
+        items: Sequence[RuntimeQueueItem[_PendingRequestDispatch]],
+    ) -> None:
+        pending_items = list(items)
+        cancellation: asyncio.CancelledError | None = None
+        while pending_items:
+            item = pending_items.pop(0)
+            request_id = item.request_id
+            if request_id not in self._requests:
+                released = self._runtime_queue.release(request_id)
+                if released is not None:
+                    pending_items.extend(released[1])
+                continue
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage="coordinator",
+                event_name="runtime_credit_acquired",
+                metadata={
+                    "scope": "pipeline",
+                    "request_class": item.request_class,
+                    "first_output_deadline_unix_s": item.deadline_unix_s,
+                    "queue_wait_ms": (time.monotonic_ns() - item.enqueued_ns) / 1e6,
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
+            try:
+                await self._dispatch_submission(item.value)
+            except asyncio.CancelledError as exc:
+                # A cancelled send is ambiguous: the stage may have received
+                # the request before cancellation reached this task. Abort it
+                # before releasing the credit, then continue draining every
+                # item already granted by the same queue transition.
+                abort_confirmed = True
+                try:
+                    await self.control_plane.broadcast_abort(
+                        AbortMessage(request_id=request_id)
+                    )
+                except Exception:
+                    abort_confirmed = False
+                    logger.exception(
+                        "Coordinator could not confirm rollback for cancelled "
+                        "dispatch req=%s; retaining its credit",
+                        request_id,
+                    )
+                if abort_confirmed:
+                    future = self._completion_futures.pop(request_id, None)
+                    if future is not None and not future.done():
+                        future.cancel()
+                    self._stream_queues.pop(request_id, None)
+                    self._requests.pop(request_id, None)
+                    self._partial_results.pop(request_id, None)
+                    released = self._runtime_queue.release(request_id)
+                    if released is not None:
+                        self._emit_runtime_credit_released(
+                            released[0], status="dispatch_cancelled"
+                        )
+                        pending_items.extend(released[1])
+                cancellation = exc
+            except Exception as exc:
+                logger.exception(
+                    "Coordinator failed to dispatch queued req=%s", request_id
+                )
+                info = self._requests.get(request_id)
+                if info is not None:
+                    info.state = RequestState.FAILED
+                    info.error = str(exc)
+                self._reject_completion_future(request_id, exc)
+                stream_queue = self._stream_queues.get(request_id)
+                if stream_queue is not None:
+                    await stream_queue.put(
+                        CompleteMessage(
+                            request_id=request_id,
+                            from_stage="coordinator",
+                            success=False,
+                            error=str(exc),
+                        )
+                    )
+                self._requests.pop(request_id, None)
+                self._partial_results.pop(request_id, None)
+                released = self._runtime_queue.release(request_id)
+                if released is not None:
+                    self._emit_runtime_credit_released(
+                        released[0], status="dispatch_error"
+                    )
+                    pending_items.extend(released[1])
+        self._publish_runtime_queue_snapshot()
+        if cancellation is not None:
+            raise cancellation
+
+    def _emit_runtime_credit_released(
+        self,
+        item: RuntimeQueueItem[_PendingRequestDispatch],
+        *,
+        status: str,
+    ) -> None:
+        if self._runtime_queue is None:
+            return
+        snapshot = self._runtime_queue.snapshot()
+        _emit_event(
+            request_id=item.request_id,
+            stage="coordinator",
+            event_name="runtime_credit_released",
+            metadata={
+                "scope": "pipeline",
+                "request_class": item.request_class,
+                "status": status,
+                "active_requests": snapshot["active_requests"],
+                "waiting_requests": snapshot["waiting_requests"],
+            },
+        )
+
+    async def _release_runtime_credit(self, request_id: str, *, status: str) -> None:
+        if self._runtime_queue is None:
+            return
+        released = self._runtime_queue.release(request_id)
+        if released is None:
+            return
+        item, dispatched = released
+        self._emit_runtime_credit_released(item, status=status)
+        await self._dispatch_runtime_items(dispatched)
+        self._publish_runtime_queue_snapshot()
+
+    async def update_queue_control(self, queue_control: Any) -> dict[str, Any]:
+        """Replace live queue limits without preempting active requests."""
+        if self._runtime_queue is None:
+            raise RuntimeError("pipeline queue_control was not configured")
+        values = (
+            queue_control.model_dump()
+            if hasattr(queue_control, "model_dump")
+            else dict(queue_control)
+        )
+        values.setdefault("class_metadata_key", self._runtime_queue.class_metadata_key)
+        values.setdefault(
+            "deadline_metadata_key", self._runtime_queue.deadline_metadata_key
+        )
+        # Trust is a startup-time boundary, not a live scheduling knob.
+        values["trust_request_metadata"] = self._runtime_queue.trust_request_metadata
+        replacement = RuntimeCreditQueue.from_config(values)
+        if (
+            replacement.class_metadata_key != self._runtime_queue.class_metadata_key
+            or replacement.deadline_metadata_key
+            != self._runtime_queue.deadline_metadata_key
+            or replacement.trust_request_metadata
+            != self._runtime_queue.trust_request_metadata
+        ):
+            raise ValueError(
+                "queue-control metadata trust and keys cannot change at runtime"
+            )
+        dispatched = self._runtime_queue.update(
+            max_active_requests=replacement.max_active_requests,
+            class_limits=replacement.class_limits,
+            discipline=replacement.discipline,
+        )
+        await self._dispatch_runtime_items(dispatched)
+        self._publish_runtime_queue_snapshot(force=True)
+        return self._runtime_queue.snapshot()
+
+    def _publish_runtime_queue_snapshot(self, *, force: bool = False) -> None:
+        if self._runtime_queue is None:
+            return
+        self._runtime_state_channel.maybe_publish(
+            self._runtime_queue.snapshot,
+            force=force,
         )
 
     def _request_id_is_reserved(self, request_id: str) -> bool:
@@ -552,7 +838,22 @@ class Coordinator:
         self,
         request_id: str,
     ) -> bool:
-        await self.control_plane.broadcast_abort(AbortMessage(request_id=request_id))
+        cancellation = None
+        queued_only = (
+            self._runtime_queue is not None
+            and self._runtime_queue.is_waiting(request_id)
+        )
+        if queued_only:
+            cancellation = self._runtime_queue.cancel(request_id)
+        else:
+            # Keep the credit held until the abort has reached the stages. If
+            # broadcasting fails, releasing first could dispatch a successor
+            # while the original request is still running and orphan its slot.
+            await self.control_plane.broadcast_abort(
+                AbortMessage(request_id=request_id)
+            )
+            if self._runtime_queue is not None:
+                cancellation = self._runtime_queue.cancel(request_id)
 
         info = self._requests.get(request_id)
         if info is None:
@@ -575,6 +876,29 @@ class Coordinator:
 
         self._requests.pop(request_id, None)
         self._partial_results.pop(request_id, None)
+
+        if cancellation is not None:
+            if cancellation.item is not None:
+                event_name = (
+                    "runtime_credit_released"
+                    if cancellation.was_active
+                    else "runtime_queue_cancelled"
+                )
+                snapshot = self._runtime_queue.snapshot()
+                _emit_event(
+                    request_id=request_id,
+                    stage="coordinator",
+                    event_name=event_name,
+                    metadata={
+                        "scope": "pipeline",
+                        "request_class": cancellation.item.request_class,
+                        "status": "aborted",
+                        "active_requests": snapshot["active_requests"],
+                        "waiting_requests": snapshot["waiting_requests"],
+                    },
+                )
+            await self._dispatch_runtime_items(cancellation.dispatched)
+            self._publish_runtime_queue_snapshot()
 
         logger.info("Coordinator aborted req=%s", request_id)
         return True
@@ -667,6 +991,7 @@ class Coordinator:
             if stream_queue is not None:
                 await stream_queue.put(msg)
             self._requests.pop(request_id, None)
+            await self._release_runtime_credit(request_id, status="failed")
             return
 
         expected_terminal_stages = self._expected_terminal_stages(request_id)
@@ -691,6 +1016,7 @@ class Coordinator:
             if request_id in self._stream_queues:
                 await self._stream_queues[request_id].put(msg)
             self._requests.pop(request_id, None)
+            await self._release_runtime_credit(request_id, status="completed")
             return
 
         # Multi-terminal: collect partial results
@@ -715,6 +1041,7 @@ class Coordinator:
             if not future.done():
                 future.set_result(merged)
         self._requests.pop(request_id, None)
+        await self._release_runtime_credit(request_id, status="completed")
 
     async def _handle_stream(self, msg: StreamMessage) -> None:
         """Handle a stream chunk from a stage."""
@@ -865,7 +1192,7 @@ class Coordinator:
             state = info.state.value
             state_counts[state] = state_counts.get(state, 0) + 1
 
-        return {
+        health = {
             "running": self._running,
             "stages": list(self._stages.keys()),
             "entry_stage": self.entry_stage,
@@ -873,3 +1200,6 @@ class Coordinator:
             "pending_completions": len(self._completion_futures),
             "request_states": state_counts,
         }
+        if self._runtime_queue is not None:
+            health["queue_control"] = self._runtime_queue.snapshot()
+        return health

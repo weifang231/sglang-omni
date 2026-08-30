@@ -20,6 +20,10 @@ from sglang_omni.pipeline.stage.runtime import Stage
 from sglang_omni.pipeline.stage.stream_queue import StreamQueue
 from sglang_omni.pipeline.stage_workers import StageLaunchConfig, _construct_stage
 from sglang_omni.proto import DataReadyMessage, SubmitMessage
+from sglang_omni.runtime_queue import (
+    FIRST_OUTPUT_DEADLINE_METADATA_KEY,
+    REQUEST_CLASS_METADATA_KEY,
+)
 from sglang_omni.scheduling import omni_scheduler as omni_scheduler_module
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from tests.unit_test.fixtures.pipeline_fakes import (
@@ -37,6 +41,195 @@ from tests.unit_test.fixtures.pipeline_fakes import (
     tensor_equal,
 )
 from tests.unit_test.pipeline.helpers import make_stage
+
+
+def test_stage_runtime_queue_enforces_credit_and_edf_dispatch() -> None:
+    async def _run() -> None:
+        scheduler = FakeScheduler()
+        stage = make_stage(
+            scheduler=scheduler,
+            queue_control={
+                "max_active_requests": 1,
+                "class_limits": {},
+                "discipline": "edf",
+                "trust_request_metadata": True,
+            },
+        )
+
+        def payload(request_id: str, deadline: float):
+            return make_stage_payload(
+                request_id=request_id,
+                metadata={
+                    REQUEST_CLASS_METADATA_KEY: "speech",
+                    FIRST_OUTPUT_DEADLINE_METADATA_KEY: deadline,
+                },
+            )
+
+        await stage._execute(payload("active", 1.0))
+        await stage._execute(payload("late", 9.0))
+        await stage._execute(payload("early", 3.0))
+        assert scheduler.inbox.get_nowait().request_id == "active"
+        assert scheduler.inbox.empty()
+
+        stage._release_runtime_credit("active", status="completed")
+        assert scheduler.inbox.get_nowait().request_id == "early"
+        assert scheduler.inbox.empty()
+
+    asyncio.run(_run())
+
+
+def test_stage_failed_active_abort_does_not_orphan_next_credit() -> None:
+    class FailingAbortScheduler(FakeScheduler):
+        def abort(self, request_id: str) -> None:
+            del request_id
+            raise RuntimeError("abort failed")
+
+    async def _run() -> None:
+        scheduler = FailingAbortScheduler()
+        stage = make_stage(
+            scheduler=scheduler,
+            queue_control={"max_active_requests": 1},
+        )
+        await stage._execute(make_stage_payload(request_id="active"))
+        await stage._execute(make_stage_payload(request_id="waiting"))
+        assert scheduler.inbox.get_nowait().request_id == "active"
+
+        stage._on_abort("active")
+
+        assert stage._runtime_queue is not None
+        snapshot = stage._runtime_queue.snapshot()
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 1
+        assert scheduler.inbox.empty()
+
+        scheduler.outbox.put(make_result_message("active"))
+        stage._running = False
+        await stage._drain_outbox_external()
+        assert scheduler.inbox.get_nowait().request_id == "waiting"
+        snapshot = stage._runtime_queue.snapshot()
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 0
+
+    asyncio.run(_run())
+
+
+def test_stage_stream_failure_retains_credit_until_failed_abort_terminates() -> None:
+    class FailingAbortScheduler(FakeScheduler):
+        def abort(self, request_id: str) -> None:
+            del request_id
+            raise RuntimeError("abort failed")
+
+    async def _run() -> None:
+        scheduler = FailingAbortScheduler()
+        stage = make_stage(
+            scheduler=scheduler,
+            queue_control={"max_active_requests": 1},
+        )
+        await stage._execute(make_stage_payload(request_id="active"))
+        await stage._execute(make_stage_payload(request_id="waiting"))
+        assert scheduler.inbox.get_nowait().request_id == "active"
+
+        await stage._abort_scheduler_and_send_failure("active", "stream failed")
+        assert stage.control_plane.completions[0].success is False
+        assert stage._runtime_queue is not None
+        assert stage._runtime_queue.snapshot()["active_requests"] == 1
+        assert scheduler.inbox.empty()
+
+        scheduler.outbox.put(make_result_message("active"))
+        stage._running = False
+        await stage._drain_outbox_external()
+        assert scheduler.inbox.get_nowait().request_id == "waiting"
+
+    asyncio.run(_run())
+
+
+def test_stage_dispatch_failure_releases_all_pregranted_credits() -> None:
+    class FailOnceScheduler(FakeScheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def enqueue(self, message) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("enqueue failed")
+            self.inbox.put(message)
+
+    async def _run() -> None:
+        scheduler = FailOnceScheduler()
+        stage = make_stage(
+            scheduler=scheduler,
+            queue_control={"max_active_requests": 0},
+        )
+        await stage._execute(make_stage_payload(request_id="failed"))
+        await stage._execute(make_stage_payload(request_id="next"))
+
+        assert stage._runtime_queue is not None
+        dispatched = stage._runtime_queue.update(
+            max_active_requests=2,
+            class_limits={},
+            discipline="fifo",
+        )
+        stage._dispatch_runtime_items(dispatched)
+        await asyncio.sleep(0)
+
+        assert scheduler.inbox.get_nowait().request_id == "next"
+        assert scheduler.inbox.empty()
+        snapshot = stage._runtime_queue.snapshot()
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 0
+        assert stage.control_plane.completions[0].request_id == "failed"
+
+    asyncio.run(_run())
+
+
+def test_stage_tp_dispatch_failure_fails_stopped_without_promoting_waiters() -> None:
+    class FailingTPFanout:
+        def fanout_work(self, payload) -> None:
+            del payload
+            raise RuntimeError("partial TP fanout")
+
+    async def _run() -> None:
+        scheduler = FakeScheduler()
+        scheduler.requires_tp_work_fanout = True
+        stage = make_stage(
+            role="leader",
+            scheduler=scheduler,
+            queue_control={"max_active_requests": 0},
+            tp_fanout=FailingTPFanout(),
+        )
+        await stage._on_submit(
+            SubmitMessage(
+                request_id="first",
+                data=make_stage_payload(request_id="first"),
+            )
+        )
+        await stage._on_submit(
+            SubmitMessage(
+                request_id="second",
+                data=make_stage_payload(request_id="second"),
+            )
+        )
+        assert stage._runtime_queue is not None
+        dispatched = stage._runtime_queue.update(
+            max_active_requests=2,
+            class_limits={},
+            discipline="fifo",
+        )
+
+        stage._dispatch_runtime_items(dispatched)
+        await asyncio.sleep(0)
+
+        assert stage._scheduler_crash_error is not None
+        assert stage.control_plane.closed is True
+        assert scheduler.inbox.empty()
+        assert stage._runtime_queue.snapshot()["active_requests"] == 0
+        assert {item.request_id for item in stage.control_plane.completions} == {
+            "first",
+            "second",
+        }
+
+    asyncio.run(_run())
 
 
 @pytest.fixture(autouse=True)
@@ -201,6 +394,18 @@ def test_stage_process_rejects_dynamic_targets_outside_static_topology() -> None
         ValueError, match="stream_done_to_fn.*outside the static topology"
     ):
         stage_obj.get_stream_done_targets("req-1", payload)
+
+
+def test_stage_process_rejects_queue_control_on_stream_receiver() -> None:
+    spec = StageLaunchConfig(
+        stage_name="vocoder",
+        factory=fake_factory_path("make_scheduler"),
+        queue_control={"max_active_requests": 1},
+        is_stream_receiver=True,
+    )
+
+    with pytest.raises(ValueError, match="would not bound.*actual WIP"):
+        _construct_stage(spec, logging.getLogger(__name__))
 
 
 def test_stage_process_rejects_dynamic_wait_sources_outside_static_fanin() -> None:

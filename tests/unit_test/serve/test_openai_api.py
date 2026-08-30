@@ -507,6 +507,24 @@ class AdminClient:
         self.calls.append(("continue_generation", payload or {}, stages, timeout_s))
         return {"success": True, "message": "ok", "results": []}
 
+    async def update_queue_control(
+        self,
+        payload: dict[str, Any],
+        *,
+        scope: str = "pipeline",
+        stages: list[str] | None = None,
+        timeout_s: float = 60.0,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "update_queue_control",
+                {"scope": scope, **payload},
+                stages,
+                timeout_s,
+            )
+        )
+        return {"success": True, "message": "ok", "results": []}
+
     async def update_weights_from_disk(
         self,
         payload: dict[str, Any],
@@ -792,6 +810,16 @@ def test_admin_routes_forward_to_client() -> None:
         "/pause_generation",
         json={"mode": "in_place", "stages": ["decode"], "timeout_s": 5},
     )
+    queue_control = client.post(
+        "/update_queue_control",
+        json={
+            "scope": "pipeline",
+            "discipline": "edf",
+            "max_active_requests": 8,
+            "class_limits": {"text": 1, "speech": 7},
+            "timeout_s": 7,
+        },
+    )
     update = client.post(
         "/update_weights_from_disk",
         json={
@@ -809,11 +837,23 @@ def test_admin_routes_forward_to_client() -> None:
     assert info.json()["load_format"] == "safetensors"
     assert info.json()["stages"][0]["stage"] == "decode"
     assert pause.status_code == 200
+    assert queue_control.status_code == 200
     assert update.status_code == 200
     assert checksum.status_code == 200
     assert admin.calls == [
         ("model_info", {}, None, 30.0),
         ("pause_generation", {"mode": "in_place"}, ["decode"], 5),
+        (
+            "update_queue_control",
+            {
+                "scope": "pipeline",
+                "discipline": "edf",
+                "max_active_requests": 8,
+                "class_limits": {"text": 1, "speech": 7},
+            },
+            None,
+            7,
+        ),
         (
             "update_weights_from_disk",
             {
@@ -832,6 +872,70 @@ def test_admin_routes_forward_to_client() -> None:
             120.0,
         ),
         ("weights_checker", {"action": "checksum"}, None, 120.0),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"max_active_request": 8},
+    ],
+)
+def test_queue_control_admin_rejects_empty_or_misspelled_limits(payload) -> None:
+    admin = AdminClient()
+    client = TestClient(create_app(admin, model_name="qwen3-omni"))
+
+    response = client.post("/update_queue_control", json=payload)
+
+    assert response.status_code == 422
+    assert admin.calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"max_active_requests": True},
+        {"class_limits": {"speech": False}},
+    ],
+)
+def test_queue_control_admin_rejects_boolean_limits(payload) -> None:
+    admin = AdminClient()
+    client = TestClient(create_app(admin, model_name="qwen3-omni"))
+
+    response = client.post("/update_queue_control", json=payload)
+
+    assert response.status_code == 422
+    assert admin.calls == []
+
+
+def test_queue_control_admin_preserves_null_global_limit_for_stage_scope() -> None:
+    admin = AdminClient()
+    client = TestClient(create_app(admin, model_name="qwen3-omni"))
+
+    response = client.post(
+        "/update_queue_control",
+        json={
+            "scope": "stage",
+            "stages": ["talker_ar"],
+            "discipline": "edf",
+            "class_limits": {"speech": 4},
+        },
+    )
+
+    assert response.status_code == 200
+    assert admin.calls == [
+        (
+            "update_queue_control",
+            {
+                "scope": "stage",
+                "discipline": "edf",
+                "max_active_requests": None,
+                "class_limits": {"speech": 4},
+            },
+            ["talker_ar"],
+            60.0,
+        )
     ]
 
 
@@ -1152,6 +1256,41 @@ def test_chat_request_omits_explicit_params_when_sampling_omitted() -> None:
     assert gen_req.sampling.top_p == 1.0
     assert gen_req.sampling.top_k == -1
     assert EXPLICIT_GENERATION_PARAMS_KEY not in gen_req.metadata
+
+
+def test_chat_request_preserves_runtime_queue_metadata() -> None:
+    req = ChatCompletionRequest(
+        model="Qwen/Qwen3-Omni",
+        messages=[{"role": "user", "content": "hello"}],
+        metadata={
+            "sglang_omni.request_class": "speech",
+            "sglang_omni.first_output_deadline_unix_s": 1_800_000_000.0,
+        },
+    )
+
+    gen_req = _build_chat_generate_request(req)
+
+    assert gen_req.metadata["sglang_omni.request_class"] == "speech"
+    assert gen_req.metadata["sglang_omni.first_output_deadline_unix_s"] == 1_800_000_000.0
+
+
+def test_speech_request_preserves_runtime_queue_metadata() -> None:
+    req = CreateSpeechRequest(
+        model="Qwen/Qwen3-TTS",
+        input="hello",
+        metadata={
+            "sglang_omni.request_class": "short",
+            "sglang_omni.first_output_deadline_unix_s": 1_800_000_000.0,
+        },
+    )
+
+    gen_req = SpeechRequestValidator(
+        default_model="Qwen/Qwen3-TTS"
+    ).build_generate_request(req)
+
+    assert gen_req.metadata["sglang_omni.request_class"] == "short"
+    assert gen_req.metadata["sglang_omni.first_output_deadline_unix_s"] == 1_800_000_000.0
+    assert gen_req.metadata["task"] == "tts"
 
 
 def test_chat_request_preserves_explicit_default_sampling_values() -> None:
@@ -3172,6 +3311,7 @@ _ADMIN_PATHS_THAT_NEED_AUTH = [
     ("POST", "/model_info"),
     ("POST", "/pause_generation"),
     ("POST", "/continue_generation"),
+    ("POST", "/update_queue_control"),
     ("POST", "/update_weights_from_disk"),
     ("POST", "/update_weights_from_tensor"),
     ("POST", "/update_weights_from_distributed"),

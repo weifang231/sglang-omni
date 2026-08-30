@@ -62,6 +62,7 @@ from sglang_omni.proto.admin import (
 )
 from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.scheduling.types import DeferredAdmission
+from sglang_omni.utils.runtime_state import RuntimeStateChannel, bounded_int
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,13 @@ class OmniScheduler:
                     1,
                 ),
             )
+        self._runtime_generation_cap_startup = min(
+            int(get_parallel().pp_max_micro_batch_size),
+            max(self.max_running_requests // self.pp_size, 1),
+        )
+        self._runtime_generation_cap_requested = self._runtime_generation_cap_startup
+        self._runtime_control_invalid_values = 0
+        self._runtime_control_clamped_values = 0
 
         # Workers
         self.tp_worker = tp_worker
@@ -483,6 +491,10 @@ class OmniScheduler:
         self.init_metrics_collector(self.tp_rank, self.pp_rank, self.dp_rank)
         self.init_metrics_reporter(self.tp_rank, self.pp_rank, self.dp_rank)
         self._init_upstream_scheduler_components()
+        self._runtime_state_channel = RuntimeStateChannel(
+            engine="sglang-omni",
+            component="omni_scheduler",
+        )
 
         self._running = False
         self._aborted_request_ids: set[str] = set()
@@ -1742,6 +1754,99 @@ class OmniScheduler:
     def event_loop(self) -> None:
         self.start()
 
+    def set_runtime_stage_id(self, stage_id: str | int) -> None:
+        channel = self.__dict__.get("_runtime_state_channel")
+        if channel is not None:
+            channel.set_stage_id(stage_id)
+
+    def _apply_runtime_control(self, control: dict[str, Any]) -> None:
+        raw_cap = control.get("generation_cap")
+        if raw_cap is None:
+            raw_cap = control.get("pp_max_micro_batch_size")
+        if raw_cap is None:
+            raw_cap = self._runtime_generation_cap_startup
+        cap = bounded_int(
+            raw_cap,
+            minimum=1,
+            maximum=self._runtime_generation_cap_startup,
+        )
+        if cap is None:
+            self._runtime_control_invalid_values += 1
+            return
+        try:
+            requested = int(raw_cap)
+        except (TypeError, ValueError, OverflowError):
+            requested = cap
+        self._runtime_generation_cap_requested = requested
+        if requested != cap:
+            self._runtime_control_clamped_values += 1
+
+        from sglang.srt.runtime_context import get_context, get_parallel
+
+        previous = int(get_parallel().pp_max_micro_batch_size)
+        if previous == cap:
+            return
+        get_context().override(
+            "sglang_omni.runtime_control",
+            pp_max_micro_batch_size=cap,
+        )
+        if cap > previous:
+            self.running_batch.batch_is_full = False
+        logger.info(
+            "OmniScheduler runtime generation cap changed from %d to %d "
+            "(startup cap %d)",
+            previous,
+            cap,
+            self._runtime_generation_cap_startup,
+        )
+
+    def _runtime_snapshot(self) -> dict[str, Any]:
+        from sglang.srt.runtime_context import get_parallel
+
+        pool_stats = self.pool_stats_observer.get_pool_stats()
+        req_pool = self.req_to_token_pool
+        with self._request_admission_lock:
+            request_build_pending = len(self._pending_request_builds)
+            request_admission_pending = len(self._pending_request_admissions)
+            request_build_backlog = len(self._backlogged_request_build_payloads)
+            deferred_requests = len(self._deferred_request_payloads)
+            waiting_requests = len(self.waiting_queue)
+            queued_admission_requests = self._queued_admission_count()
+            pending_stream_ingress = len(self._pending_stream_ingress)
+        return {
+            "stage_tp_rank": int(self.tp_rank),
+            "stage_tp_size": int(self.tp_size),
+            "engine_paused": int(self._engine_paused),
+            "waiting_requests": waiting_requests,
+            "running_requests": len(self.running_batch.reqs),
+            "request_build_pending": request_build_pending,
+            "request_admission_pending": request_admission_pending,
+            "request_build_backlog": request_build_backlog,
+            "deferred_requests": deferred_requests,
+            "pending_stream_ingress": pending_stream_ingress,
+            "queued_admission_requests": queued_admission_requests,
+            "kv_used_tokens": int(pool_stats.full_num_used),
+            "kv_available_tokens": int(pool_stats.full_available_size),
+            "kv_evictable_tokens": int(pool_stats.full_evictable_size),
+            "kv_token_usage": float(pool_stats.full_token_usage),
+            "request_slots_available": int(req_pool.available_size()),
+            "request_slots_capacity": int(req_pool.size),
+            "generation_cap_current": int(get_parallel().pp_max_micro_batch_size),
+            "generation_cap_startup": self._runtime_generation_cap_startup,
+            "generation_cap_requested": self._runtime_generation_cap_requested,
+            "runtime_control_invalid_values": self._runtime_control_invalid_values,
+            "runtime_control_clamped_values": self._runtime_control_clamped_values,
+        }
+
+    def _runtime_tick(self) -> None:
+        channel = self.__dict__.get("_runtime_state_channel")
+        if channel is None or not channel.enabled:
+            return
+        control = channel.read_control_if_changed()
+        if control is not None:
+            self._apply_runtime_control(control)
+        channel.maybe_publish(self._runtime_snapshot)
+
     def stop(self) -> None:
         self._running = False
         self._discard_pending_request_admissions()
@@ -2282,6 +2387,7 @@ class OmniScheduler:
         # slows ~600x, dropping audio QPS from >10 to <0.5.
         while self._running:
             self._process_admin_requests()
+            self._runtime_tick()
             recv_reqs = self.recv_requests()
             recv_reqs.extend(self._take_deferred_request_payloads())
             self.process_input_requests(recv_reqs)
@@ -2497,6 +2603,7 @@ class OmniScheduler:
         """
         while self._running:
             self._process_admin_requests()
+            self._runtime_tick()
             recv_reqs = self.recv_requests()
             recv_reqs.extend(self._take_deferred_request_payloads())
             self.process_input_requests(recv_reqs)

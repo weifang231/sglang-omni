@@ -344,6 +344,29 @@ class Client:
             timeout_s=timeout_s,
         )
 
+    async def update_queue_control(
+        self,
+        queue_control: dict[str, Any],
+        *,
+        scope: str = "pipeline",
+        stages: list[str] | None = None,
+        timeout_s: float = 60.0,
+    ) -> dict[str, Any]:
+        """Update non-preemptive runtime WIP credits and queue ordering."""
+        if scope == "pipeline":
+            if stages:
+                raise ValueError("stages is only valid for scope='stage'")
+            snapshot = await self._coordinator.update_queue_control(queue_control)
+            return {"success": True, "message": "ok", "data": snapshot}
+        if scope == "stage":
+            return await self._coordinator.admin(
+                "update_queue_control",
+                queue_control,
+                stages=stages,
+                timeout_s=timeout_s,
+            )
+        raise ValueError("scope must be 'pipeline' or 'stage'")
+
     async def update_weights_from_disk(
         self,
         payload: dict[str, Any],

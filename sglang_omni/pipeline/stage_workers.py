@@ -83,6 +83,9 @@ class StageLaunchConfig:
     # Communication pool/options. Transport selection belongs to CommRouter.
     comm_config: dict[str, Any] = field(default_factory=dict)
 
+    # Optional runtime-owned stage queue and WIP-credit policy.
+    queue_control: dict[str, Any] | None = None
+
     # Endpoints
     recv_endpoint: str = ""
     coordinator_endpoint: str = ""
@@ -586,6 +589,12 @@ def _construct_stage(
     log: logging.Logger,
     local_dispatcher: LocalStageDispatcher | None = None,
 ) -> Stage:
+    if spec.queue_control is not None and spec.is_stream_receiver:
+        raise ValueError(
+            f"Stage {spec.stage_name!r} cannot enable queue_control while "
+            "receiving stream chunks: payload-only admission would not bound "
+            "the scheduler's actual WIP"
+        )
     gpu_id = spec.gpu_id
     if gpu_id is not None:
         current_platform.set_device(int(gpu_id))
@@ -750,6 +759,7 @@ def _construct_stage(
         control_plane=control_plane,
         input_handler=input_handler,
         comm_config=spec.comm_config,
+        queue_control=spec.queue_control,
         scheduler=scheduler,
         project_payload=project_payload or None,
         stream_targets=spec.stream_targets or None,

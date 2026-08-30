@@ -7,15 +7,16 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Any, Mapping
+from typing import Any
 
 import torch
 
 from sglang_omni.models.qwen3_tts.payload_types import Qwen3TTSState
 from sglang_omni.proto import StagePayload
-from sglang_omni.scheduling.messages import OutgoingMessage
+from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.scheduling.pipeline_state import build_usage
 from sglang_omni.scheduling.streaming_vocoder import (
     INITIAL_CODEC_CHUNK_FRAMES_PARAM,
@@ -24,6 +25,11 @@ from sglang_omni.scheduling.streaming_vocoder import (
 )
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.cuda_staging import GrowablePinnedBuffer, PinnedTransferSlot
+from sglang_omni.utils.runtime_state import (
+    RuntimeStateChannel,
+    bounded_float,
+    bounded_int,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +88,38 @@ def _raise_for_bad_rows(bad_rows: Any, count: int) -> None:
     if not indices:
         return
     raise _Qwen3TTSInvalidCodeRows(indices, _bad_row_message(indices))
+
+
+def _tensor_storage_bytes(
+    tensors: list[torch.Tensor],
+) -> tuple[int, int, int, int]:
+    """Return logical and unique retained bytes without synchronizing devices."""
+    logical_bytes = 0
+    retained_bytes = 0
+    cpu_retained_bytes = 0
+    cuda_retained_bytes = 0
+    seen: set[tuple[str, int | None, int]] = set()
+    for tensor in tensors:
+        if not torch.is_tensor(tensor):
+            continue
+        logical_bytes += int(tensor.numel()) * int(tensor.element_size())
+        storage = tensor.untyped_storage()
+        key = (tensor.device.type, tensor.device.index, int(storage.data_ptr()))
+        if key in seen:
+            continue
+        seen.add(key)
+        size = int(storage.nbytes())
+        retained_bytes += size
+        if tensor.device.type == "cuda":
+            cuda_retained_bytes += size
+        elif tensor.device.type == "cpu":
+            cpu_retained_bytes += size
+    return (
+        logical_bytes,
+        retained_bytes,
+        cpu_retained_bytes,
+        cuda_retained_bytes,
+    )
 
 
 @dataclass(eq=False)
@@ -271,6 +309,8 @@ class _Qwen3TTSInitialDecodeGraphs:
         self._graphs: dict[tuple[int, int], torch.cuda.CUDAGraph] = {}
         self._inputs: dict[tuple[int, int], torch.Tensor] = {}
         self._outputs: dict[tuple[int, int], torch.Tensor] = {}
+        self._replay_count = 0
+        self._fallback_count = 0
 
     def capture(self) -> None:
         if not self._enabled or self._graphs:
@@ -325,17 +365,34 @@ class _Qwen3TTSInitialDecodeGraphs:
             or int(codes.shape[1]) != self._num_quantizers
             or int(codes.shape[2]) not in self._input_frames
         ):
+            self._fallback_count += 1
             return None
         batch_size = int(codes.shape[0])
         bucket = next((size for size in self._batch_sizes if size >= batch_size), None)
         key = (int(codes.shape[2]), bucket) if bucket is not None else None
         if key is None or key not in self._graphs:
+            self._fallback_count += 1
             return None
         static_input = self._inputs[key]
         static_input.zero_()
         static_input[:batch_size].copy_(codes)
         self._graphs[key].replay()
+        self._replay_count += 1
         return self._outputs[key][:batch_size].clone()
+
+    def runtime_snapshot(self) -> dict[str, Any]:
+        tensors = [*self._inputs.values(), *self._outputs.values()]
+        logical_bytes, retained_bytes, _, _ = _tensor_storage_bytes(tensors)
+        return {
+            "resident_count": len(self._graphs),
+            "resident_keys": [
+                f"{frames}x{batch}" for frames, batch in sorted(self._graphs)
+            ],
+            "static_tensor_logical_bytes": logical_bytes,
+            "static_tensor_bytes": retained_bytes,
+            "replay_count": self._replay_count,
+            "fallback_count": self._fallback_count,
+        }
 
 
 class Qwen3TTSStreamingVocoderScheduler(
@@ -475,6 +532,26 @@ class Qwen3TTSStreamingVocoderScheduler(
             max_batch_size=max_batch_size,
             max_batch_wait_ms=max_batch_wait_ms,
         )
+        self._runtime_codec_batch_cap_startup = self._max_batch_size
+        self._runtime_codec_batch_wait_s_startup = self._max_batch_wait_s
+        self._runtime_initial_batch_cap_startup = self._initial_max_batch_size
+        self._runtime_initial_batch_wait_s_startup = self._initial_batch_wait_s
+        self._runtime_followup_batch_cap_startup = self._followup_max_batch_size
+        self._runtime_followup_batch_wait_s_startup = self._followup_batch_wait_s
+        self._runtime_control_invalid_values = 0
+        self._runtime_control_clamped_values = 0
+        self._runtime_control_lock = threading.Lock()
+        self._runtime_batch_stats_lock = threading.Lock()
+        self._runtime_batch_histograms: dict[str, dict[int, int]] = {
+            "initial_collected": {},
+            "followup_collected": {},
+            "initial_executed": {},
+            "followup_executed": {},
+        }
+        self._runtime_state_channel = RuntimeStateChannel(
+            engine="sglang-omni",
+            component="qwen3_tts_vocoder",
+        )
 
     def start(self) -> None:
         try:
@@ -486,6 +563,281 @@ class Qwen3TTSStreamingVocoderScheduler(
         self._signal_async_stop()
         super().stop()
         self._join_async_workers()
+
+    def set_runtime_stage_id(self, stage_id: str | int) -> None:
+        channel = self.__dict__.get("_runtime_state_channel")
+        if channel is not None:
+            channel.set_stage_id(stage_id)
+
+    def _next_message(self) -> IncomingMessage | None:
+        self._runtime_tick()
+        return super()._next_message()
+
+    def _apply_runtime_int_control(
+        self,
+        control: dict[str, Any],
+        *,
+        key: str,
+        fallback_key: str | None,
+        maximum: int,
+        attribute: str,
+    ) -> None:
+        if key in control:
+            raw_value = control[key]
+        elif fallback_key is not None and fallback_key in control:
+            raw_value = control[fallback_key]
+        else:
+            raw_value = maximum
+        value = bounded_int(raw_value, minimum=1, maximum=maximum)
+        if value is None:
+            self._runtime_control_invalid_values += 1
+            return
+        try:
+            requested = int(raw_value)
+        except (TypeError, ValueError, OverflowError):
+            requested = value
+        if requested != value:
+            self._runtime_control_clamped_values += 1
+        setattr(self, attribute, value)
+
+    def _apply_runtime_wait_control(
+        self,
+        control: dict[str, Any],
+        *,
+        key: str,
+        fallback_key: str | None,
+        maximum_s: float,
+        attribute: str,
+    ) -> None:
+        if key in control:
+            raw_value = control[key]
+        elif fallback_key is not None and fallback_key in control:
+            raw_value = control[fallback_key]
+        else:
+            raw_value = maximum_s * 1000.0
+        value_ms = bounded_float(
+            raw_value,
+            minimum=0.0,
+            maximum=maximum_s * 1000.0,
+        )
+        if value_ms is None:
+            self._runtime_control_invalid_values += 1
+            return
+        try:
+            requested_ms = float(raw_value)
+        except (TypeError, ValueError, OverflowError):
+            requested_ms = value_ms
+        if requested_ms != value_ms:
+            self._runtime_control_clamped_values += 1
+        setattr(self, attribute, value_ms / 1000.0)
+
+    def _apply_runtime_control(self, control: dict[str, Any]) -> None:
+        with self._runtime_control_lock:
+            self._apply_runtime_int_control(
+                control,
+                key="codec_batch_cap",
+                fallback_key=None,
+                maximum=self._runtime_codec_batch_cap_startup,
+                attribute="_max_batch_size",
+            )
+            self._apply_runtime_int_control(
+                control,
+                key="initial_batch_cap",
+                fallback_key="codec_batch_cap",
+                maximum=self._runtime_initial_batch_cap_startup,
+                attribute="_initial_max_batch_size",
+            )
+            self._apply_runtime_int_control(
+                control,
+                key="followup_batch_cap",
+                fallback_key="codec_batch_cap",
+                maximum=self._runtime_followup_batch_cap_startup,
+                attribute="_followup_max_batch_size",
+            )
+            self._apply_runtime_wait_control(
+                control,
+                key="codec_batch_wait_ms",
+                fallback_key=None,
+                maximum_s=self._runtime_codec_batch_wait_s_startup,
+                attribute="_max_batch_wait_s",
+            )
+            self._apply_runtime_wait_control(
+                control,
+                key="initial_batch_wait_ms",
+                fallback_key="codec_batch_wait_ms",
+                maximum_s=self._runtime_initial_batch_wait_s_startup,
+                attribute="_initial_batch_wait_s",
+            )
+            self._apply_runtime_wait_control(
+                control,
+                key="followup_batch_wait_ms",
+                fallback_key="codec_batch_wait_ms",
+                maximum_s=self._runtime_followup_batch_wait_s_startup,
+                attribute="_followup_batch_wait_s",
+            )
+
+    def _record_batch_stat(self, kind: str, batch_size: int) -> None:
+        if kind not in self._runtime_batch_histograms or batch_size <= 0:
+            return
+        with self._runtime_batch_stats_lock:
+            histogram = self._runtime_batch_histograms[kind]
+            histogram[batch_size] = histogram.get(batch_size, 0) + 1
+
+    @staticmethod
+    def _batch_histogram_summary(histogram: Mapping[int, int]) -> dict[str, Any]:
+        batches = sum(histogram.values())
+        items = sum(size * count for size, count in histogram.items())
+        return {
+            "batch_size_histogram": {
+                str(size): histogram[size] for size in sorted(histogram)
+            },
+            "batches_total": batches,
+            "items_total": items,
+            "mean_batch_size": (items / batches if batches else 0.0),
+        }
+
+    def _runtime_batch_snapshot(self) -> dict[str, Any]:
+        with self._runtime_batch_stats_lock:
+            histograms = {
+                kind: dict(histogram)
+                for kind, histogram in self._runtime_batch_histograms.items()
+            }
+        for suffix in ("collected", "executed"):
+            initial = histograms[f"initial_{suffix}"]
+            followup = histograms[f"followup_{suffix}"]
+            overall = dict(initial)
+            for size, frequency in followup.items():
+                overall[size] = overall.get(size, 0) + frequency
+            histograms[f"overall_{suffix}"] = overall
+
+        snapshot: dict[str, Any] = {}
+        for kind, histogram in histograms.items():
+            summary = self._batch_histogram_summary(histogram)
+            snapshot.update({f"{kind}_{key}": value for key, value in summary.items()})
+        return snapshot
+
+    def _runtime_snapshot(self) -> dict[str, Any]:
+        with self._runtime_control_lock:
+            control_snapshot = {
+                "codec_batch_cap_current": self._max_batch_size,
+                "codec_batch_cap_startup": self._runtime_codec_batch_cap_startup,
+                "codec_batch_wait_ms_current": self._max_batch_wait_s * 1000.0,
+                "codec_batch_wait_ms_startup": (
+                    self._runtime_codec_batch_wait_s_startup * 1000.0
+                ),
+                "initial_batch_cap_current": self._initial_max_batch_size,
+                "initial_batch_cap_startup": (self._runtime_initial_batch_cap_startup),
+                "initial_batch_wait_ms_current": self._initial_batch_wait_s * 1000.0,
+                "initial_batch_wait_ms_startup": (
+                    self._runtime_initial_batch_wait_s_startup * 1000.0
+                ),
+                "followup_batch_cap_current": self._followup_max_batch_size,
+                "followup_batch_cap_startup": (
+                    self._runtime_followup_batch_cap_startup
+                ),
+                "followup_batch_wait_ms_current": self._followup_batch_wait_s * 1000.0,
+                "followup_batch_wait_ms_startup": (
+                    self._runtime_followup_batch_wait_s_startup * 1000.0
+                ),
+                "runtime_control_invalid_values": (
+                    self._runtime_control_invalid_values
+                ),
+                "runtime_control_clamped_values": (
+                    self._runtime_control_clamped_values
+                ),
+            }
+        with self._state_lock:
+            states = list(self._stream_states.values())
+            code_tensors = [tensor for state in states for tensor in state.code_chunks]
+            logical_bytes, retained_bytes, cpu_bytes, cuda_bytes = (
+                _tensor_storage_bytes(code_tensors)
+            )
+            undecoded_frames = sum(
+                max(
+                    0,
+                    state.total_frames
+                    - state.ref_frames
+                    - state.emitted_generated_frames,
+                )
+                for state in states
+            )
+            now = time.monotonic()
+            playback_slacks = [
+                state.playback_deadline_s - now
+                for state in states
+                if state.decoded_chunks > 0
+            ]
+            snapshot: dict[str, Any] = {
+                "active_codec_states": len(states),
+                "initial_pending_states": sum(
+                    int(state.initial_pending) for state in states
+                ),
+                "followup_pending_states": sum(
+                    int(state.followup_pending) for state in states
+                ),
+                "final_pending_states": sum(
+                    int(state.final_pending) for state in states
+                ),
+                "decoded_codec_states": sum(
+                    int(state.decoded_chunks > 0) for state in states
+                ),
+                "codec_total_frames": sum(state.total_frames for state in states),
+                "codec_undecoded_frames": undecoded_frames,
+                "codec_tensor_logical_bytes": logical_bytes,
+                "codec_tensor_retained_bytes": retained_bytes,
+                "codec_tensor_cpu_retained_bytes": cpu_bytes,
+                "codec_tensor_cuda_retained_bytes": cuda_bytes,
+                "initial_queue_depth": self._initial_queue.qsize(),
+                "followup_queue_depth": self._followup_queue.qsize(),
+                "pending_messages": len(self._pending_messages),
+                "pending_done": len(self._pending_done),
+                "stream_payloads": len(self._stream_payloads),
+                "playback_slack_streams": len(playback_slacks),
+                "playback_slack_min_s": (
+                    min(playback_slacks) if playback_slacks else 0.0
+                ),
+                "playback_slack_mean_s": (
+                    sum(playback_slacks) / len(playback_slacks)
+                    if playback_slacks
+                    else 0.0
+                ),
+                "playback_slack_max_s": (
+                    max(playback_slacks) if playback_slacks else 0.0
+                ),
+                **control_snapshot,
+                **self._runtime_batch_snapshot(),
+            }
+
+        initial_graph = self._initial_decode_graphs.runtime_snapshot()
+        followup_graph = self._followup_decode_graphs.runtime_snapshot()
+        for prefix, graph_snapshot in (
+            ("initial_graph", initial_graph),
+            ("followup_graph", followup_graph),
+        ):
+            snapshot.update(
+                {f"{prefix}_{key}": value for key, value in graph_snapshot.items()}
+            )
+        snapshot.update(
+            {
+                "graph_resident_count": initial_graph["resident_count"]
+                + followup_graph["resident_count"],
+                "graph_static_tensor_bytes": initial_graph["static_tensor_bytes"]
+                + followup_graph["static_tensor_bytes"],
+                "graph_replay_count": initial_graph["replay_count"]
+                + followup_graph["replay_count"],
+                "graph_fallback_count": initial_graph["fallback_count"]
+                + followup_graph["fallback_count"],
+            }
+        )
+        return snapshot
+
+    def _runtime_tick(self) -> None:
+        if not self._runtime_state_channel.enabled:
+            return
+        control = self._runtime_state_channel.read_control_if_changed()
+        if control is not None:
+            self._apply_runtime_control(control)
+        self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
 
     def warmup_now(self) -> None:
         if not self._async_decode:
@@ -669,7 +1021,11 @@ class Qwen3TTSStreamingVocoderScheduler(
         plan = self._build_decode_plan(state, is_final=is_final)
         if plan is None:
             return None
-        handle = self._launch_decode_plans([plan], stream=self._decode_stream)
+        handle = self._launch_decode_plans(
+            [plan],
+            stream=self._decode_stream,
+            batch_kind="initial" if state.decoded_chunks == 0 else "followup",
+        )
         deltas = handle.resolve()
         return self._commit_decode_plan(state, plan, deltas[0])
 
@@ -740,6 +1096,7 @@ class Qwen3TTSStreamingVocoderScheduler(
         plans: list[_Qwen3TTSDecodePlan],
         *,
         stream: torch.cuda.Stream | None,
+        batch_kind: str | None = None,
     ) -> _Qwen3TTSDecodeHandle:
         """Launch one decode batch and return its handle.
 
@@ -771,7 +1128,9 @@ class Qwen3TTSStreamingVocoderScheduler(
             _raise_for_bad_rows(bad_rows, len(plans))
             deltas: list[torch.Tensor] = []
             for plan in plans:
-                single = self._launch_decode_plans([plan], stream=stream)
+                single = self._launch_decode_plans(
+                    [plan], stream=stream, batch_kind=batch_kind
+                )
                 deltas.extend(single.resolve())
             return _Qwen3TTSDecodeHandle(deltas, bad_rows=None)
 
@@ -780,6 +1139,8 @@ class Qwen3TTSStreamingVocoderScheduler(
         with torch.inference_mode():
             if stream is None:
                 _raise_for_bad_rows(bad_rows, len(plans))
+                if batch_kind is not None:
+                    self._record_batch_stat(f"{batch_kind}_executed", len(plans))
                 waveforms = self._split_batch_waveform(
                     self._decoder.chunked_decode(decoder_input), len(plans)
                 )
@@ -793,6 +1154,8 @@ class Qwen3TTSStreamingVocoderScheduler(
                     ],
                     bad_rows=None,
                 )
+            if batch_kind is not None:
+                self._record_batch_stat(f"{batch_kind}_executed", len(plans))
             return self._launch_async(plans, decoder_input, bad_rows, stream)
 
     def _launch_async(
@@ -1118,13 +1481,13 @@ class Qwen3TTSStreamingVocoderScheduler(
     def _collect_async_batch(
         self,
         work_queue: queue.Queue[tuple[str, _Qwen3TTSStreamState] | None],
-        *,
-        max_batch_size: int,
-        batch_wait_s: float,
     ) -> list[tuple[str, _Qwen3TTSStreamState]] | None:
         queued = work_queue.get()
         if queued is None or self._async_stop.is_set():
             return None
+        with self._runtime_control_lock:
+            max_batch_size = self._initial_max_batch_size
+            batch_wait_s = self._initial_batch_wait_s
         batch = [queued]
         deadline = time.monotonic() + batch_wait_s
         while len(batch) < max_batch_size:
@@ -1138,15 +1501,12 @@ class Qwen3TTSStreamingVocoderScheduler(
             if next_queued is None:
                 return None
             batch.append(next_queued)
+        self._record_batch_stat("initial_collected", len(batch))
         return batch
 
     def _run_initial_worker(self) -> None:
         while True:
-            batch = self._collect_async_batch(
-                self._initial_queue,
-                max_batch_size=self._initial_max_batch_size,
-                batch_wait_s=self._initial_batch_wait_s,
-            )
+            batch = self._collect_async_batch(self._initial_queue)
             if batch is None:
                 return
             self._run_initial_batch(batch)
@@ -1176,7 +1536,11 @@ class Qwen3TTSStreamingVocoderScheduler(
                 planned.append((request_id, state, plan))
 
         for group in self._group_decode_plans(planned):
-            decoded = self._decode_group(group, stream=self._decode_stream)
+            decoded = self._decode_group(
+                group,
+                stream=self._decode_stream,
+                batch_kind="initial",
+            )
             if decoded is None:
                 continue
             for entry, delta in zip(*decoded):
@@ -1188,6 +1552,7 @@ class Qwen3TTSStreamingVocoderScheduler(
         group: list[tuple[str, _Qwen3TTSStreamState, _Qwen3TTSDecodePlan]],
         *,
         stream: torch.cuda.Stream | None,
+        batch_kind: str | None = None,
     ) -> (
         tuple[list[tuple[str, _Qwen3TTSStreamState, _Qwen3TTSDecodePlan]], list] | None
     ):
@@ -1195,7 +1560,9 @@ class Qwen3TTSStreamingVocoderScheduler(
         while group:
             try:
                 handle = self._launch_decode_plans(
-                    [entry[2] for entry in group], stream=stream
+                    [entry[2] for entry in group],
+                    stream=stream,
+                    batch_kind=batch_kind,
                 )
                 deltas = handle.resolve()
             except _Qwen3TTSInvalidCodeRows as exc:
@@ -1270,9 +1637,12 @@ class Qwen3TTSStreamingVocoderScheduler(
         _, _, request_id, state = self._followup_queue.get()
         if state is None or self._async_stop.is_set():
             return None
+        with self._runtime_control_lock:
+            max_batch_size = self._followup_max_batch_size
+            batch_wait_s = self._followup_batch_wait_s
         batch = [(request_id, state)]
-        deadline = time.monotonic() + self._followup_batch_wait_s
-        while len(batch) < self._followup_max_batch_size:
+        deadline = time.monotonic() + batch_wait_s
+        while len(batch) < max_batch_size:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -1283,6 +1653,7 @@ class Qwen3TTSStreamingVocoderScheduler(
             if state is None:
                 return None
             batch.append((request_id, state))
+        self._record_batch_stat("followup_collected", len(batch))
         return batch
 
     def _run_followup_batch(
@@ -1307,7 +1678,11 @@ class Qwen3TTSStreamingVocoderScheduler(
                 planned.append((request_id, state, plan))
 
         for group in self._group_decode_plans(planned):
-            decoded = self._decode_group(group, stream=self._followup_decode_stream)
+            decoded = self._decode_group(
+                group,
+                stream=self._followup_decode_stream,
+                batch_kind="followup",
+            )
             if decoded is None:
                 continue
             for entry, delta in zip(*decoded):

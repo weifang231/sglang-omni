@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import torch
@@ -31,6 +33,7 @@ from sglang_omni.scheduling.messages import OutgoingMessage
 from sglang_omni.scheduling.streaming_vocoder import StreamingVocoderBase
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.device import resolve_device_spec
+from sglang_omni.utils.runtime_state import RuntimeStateChannel
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +195,15 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
         self._last_oldest_wait_ms: float = 0.0
         self._last_due_bucket_count: int = 0
         self._pending_step_failures: list[str] = []
+        self._decode_batch_stats_lock = threading.Lock()
+        self._decode_batch_histograms: dict[str, dict[int, int]] = {
+            "initial": {},
+            "followup": {},
+        }
+        self._runtime_state_channel = RuntimeStateChannel(
+            engine="sglang-omni",
+            component="qwen3_omni_code2wav",
+        )
         self._can_batch_stream_chunks = self._enable_batching
         if self._enable_batching:
             self._stream_chunk_batch_max = self._batch_ceiling
@@ -222,6 +234,100 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
     def is_streaming_payload(self, payload: StagePayload) -> bool:
         del payload
         return True
+
+    def set_runtime_stage_id(self, stage_id: str | int) -> None:
+        self._runtime_state_channel.set_stage_id(stage_id)
+
+    def _record_decode_batch(self, kind: str, batch_size: int) -> None:
+        if kind not in self._decode_batch_histograms or batch_size <= 0:
+            return
+        with self._decode_batch_stats_lock:
+            histogram = self._decode_batch_histograms[kind]
+            histogram[batch_size] = histogram.get(batch_size, 0) + 1
+
+    @staticmethod
+    def _batch_histogram_summary(histogram: Mapping[int, int]) -> dict[str, Any]:
+        batches = sum(histogram.values())
+        items = sum(size * count for size, count in histogram.items())
+        return {
+            "batch_size_histogram": {
+                str(size): histogram[size] for size in sorted(histogram)
+            },
+            "batches_total": batches,
+            "items_total": items,
+            "mean_batch_size": (items / batches if batches else 0.0),
+        }
+
+    def _runtime_snapshot(self) -> dict[str, Any]:
+        with self._decode_batch_stats_lock:
+            initial = dict(self._decode_batch_histograms["initial"])
+            followup = dict(self._decode_batch_histograms["followup"])
+        overall = dict(initial)
+        for size, count in followup.items():
+            overall[size] = overall.get(size, 0) + count
+
+        snapshot: dict[str, Any] = {
+            "enable_batching": self._enable_batching,
+            "stream_chunk_size": self._stream_chunk_size,
+            "initial_codec_chunk_frames": self._initial_codec_chunk_frames,
+            "left_context_size": self._left_context_size,
+            "max_batch_wait_ms": self._max_batch_wait_s * 1000.0,
+            "batch_floor": self._batch_floor,
+            "batch_ceiling": self._batch_ceiling,
+            "active_codec_states": len(self._stream_states),
+            "inbox_depth": self.inbox.qsize(),
+            "pending_message_depth": len(self._pending_messages),
+        }
+        for prefix, histogram in (
+            ("initial_decode", initial),
+            ("followup_decode", followup),
+            ("overall_decode", overall),
+        ):
+            summary = self._batch_histogram_summary(histogram)
+            snapshot.update(
+                {f"{prefix}_{key}": value for key, value in summary.items()}
+            )
+        graph_stats = (
+            self._cuda_graph_runner.stats()
+            if self._cuda_graph_runner is not None
+            else {"enabled": False}
+        )
+        graph_contract = graph_stats.get("graph_contract", {})
+        graph_keys = graph_contract.get("keys", [])
+        captured_batch_sizes = (
+            sorted(
+                {
+                    int(key["batch_size"])
+                    for key in graph_keys
+                    if isinstance(key, Mapping) and "batch_size" in key
+                }
+            )
+            if isinstance(graph_keys, list)
+            else []
+        )
+        graph_runtime = graph_stats.get("runtime", {})
+        snapshot.update(
+            {
+                "cuda_graph_enabled": bool(graph_stats.get("enabled", False)),
+                "cuda_graph_captured_batch_sizes": captured_batch_sizes,
+                "cuda_graph_max_captured_batch_size": (
+                    max(captured_batch_sizes) if captured_batch_sizes else 0
+                ),
+                "cuda_graph_replays": int(graph_runtime.get("graph_replays", 0)),
+                "cuda_graph_replay_failures": int(
+                    graph_runtime.get("replay_failures", 0)
+                ),
+                "cuda_graph_fallback_counts": dict(
+                    graph_runtime.get("fallback_counts", {})
+                ),
+                "cuda_graph_stats": graph_stats,
+            }
+        )
+        return snapshot
+
+    def _runtime_tick(self) -> None:
+        if self._runtime_state_channel.enabled:
+            self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
 
     def create_stream_state(self, request_id: str) -> Code2WavStreamState:
         del request_id
@@ -337,6 +443,7 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
             )
         window = torch.stack(state.chunks[start - context : end], dim=0)
         codes = window.transpose(0, 1).unsqueeze(0)
+        self._record_decode_batch("initial" if start == 0 else "followup", 1)
         wav, execution_metadata = self._forward_codes(
             codes,
             graph_eligible=not is_final,
@@ -633,6 +740,7 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
                 return
 
     def _next_message(self):
+        self._runtime_tick()
         # Note (wenyao): ``Event.query()`` is non-blocking, so reaping on this
         # loop cannot recreate the abort stall it replaces.
         with self._state_lock:
@@ -945,6 +1053,10 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
                     f"{window_frames}"
                 )
         codes = torch.stack(rows, dim=0)
+        self._record_decode_batch(
+            "initial" if all(state.emitted == 0 for _, state in group) else "followup",
+            len(group),
+        )
         wav, execution_metadata = self._forward_codes(
             codes,
             graph_eligible=self._chunk_aligned_dispatch,

@@ -8,11 +8,15 @@ import gc
 import pytest
 
 from sglang_omni.admission import QueueFullError
-from sglang_omni.config import PipelineConfig, ProcessConfig
+from sglang_omni.config import PipelineConfig, ProcessConfig, QueueControlConfig
 from sglang_omni.config.topology import compile_logical_processes
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.pipeline.replicas import ReplicaTopology, expand_replica_stages
 from sglang_omni.proto import CompleteMessage, OmniRequest, StreamMessage
+from sglang_omni.runtime_queue import (
+    FIRST_OUTPUT_DEADLINE_METADATA_KEY,
+    REQUEST_CLASS_METADATA_KEY,
+)
 from tests.unit_test.fixtures.pipeline_fakes import RecordingCoordinatorControlPlane
 from tests.unit_test.pipeline.helpers import stage
 
@@ -805,6 +809,431 @@ def test_coordinator_rejects_submit_when_in_flight_cap_is_reached() -> None:
         ]
 
     asyncio.run(_run())
+
+
+def test_coordinator_runtime_queue_enforces_class_credits_and_edf() -> None:
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(
+                max_active_requests=2,
+                class_limits={"text": 1, "speech": 1},
+                discipline="edf",
+                trust_request_metadata=True,
+            ),
+        )
+        control_plane = RecordingCoordinatorControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        def request(request_class: str, deadline: float) -> OmniRequest:
+            return OmniRequest(
+                inputs="hello",
+                metadata={
+                    REQUEST_CLASS_METADATA_KEY: request_class,
+                    FIRST_OUTPUT_DEADLINE_METADATA_KEY: deadline,
+                },
+            )
+
+        await coordinator._submit_request("text-active", request("text", 1.0))
+        await coordinator._submit_request("text-wait", request("text", 2.0))
+        await coordinator._submit_request("speech-active", request("speech", 9.0))
+        await coordinator._submit_request("speech-late", request("speech", 8.0))
+        await coordinator._submit_request("speech-early", request("speech", 3.0))
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "text-active",
+            "speech-active",
+        ]
+
+        await coordinator._handle_completion(
+            CompleteMessage("speech-active", "preprocess", True, result={})
+        )
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "text-active",
+            "speech-active",
+            "speech-early",
+        ]
+
+        await coordinator._handle_completion(
+            CompleteMessage("text-active", "preprocess", True, result={})
+        )
+        assert control_plane.submitted[-1][2].request_id == "text-wait"
+
+        for request_id in ("text-wait", "speech-early", "speech-late"):
+            if request_id in coordinator._requests:
+                await coordinator.abort(request_id)
+
+    asyncio.run(_run())
+
+
+def test_coordinator_queue_update_and_waiting_abort_are_runtime_native() -> None:
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(
+                max_active_requests=1,
+                trust_request_metadata=True,
+            ),
+        )
+        control_plane = RecordingCoordinatorControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("r1", "one")
+        await coordinator._submit_request("r2", "two")
+        await coordinator._submit_request("r3", "three")
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == ["r1"]
+
+        assert await coordinator.abort("r2") is True
+        assert control_plane.aborts == []
+        snapshot = await coordinator.update_queue_control(
+            QueueControlConfig(max_active_requests=2)
+        )
+        assert snapshot["active_requests"] == 2
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "r1",
+            "r3",
+        ]
+
+        await coordinator.abort("r1")
+        await coordinator.abort("r3")
+
+    asyncio.run(_run())
+
+
+def test_coordinator_accepts_class_only_runtime_queue_update() -> None:
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(
+                max_active_requests=1,
+                trust_request_metadata=True,
+            ),
+        )
+        coordinator.control_plane = RecordingCoordinatorControlPlane()
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        snapshot = await coordinator.update_queue_control(
+            {"discipline": "edf", "class_limits": {" gold ": 1}}
+        )
+
+        assert snapshot["max_active_requests"] is None
+        assert snapshot["class_limits"] == {"gold": 1}
+
+    asyncio.run(_run())
+
+
+def test_coordinator_failed_active_abort_does_not_orphan_next_credit() -> None:
+    class FailingAbortControlPlane(RecordingCoordinatorControlPlane):
+        async def broadcast_abort(self, msg) -> None:
+            del msg
+            raise RuntimeError("abort transport failed")
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = FailingAbortControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("r1", "one")
+        await coordinator._submit_request("r2", "two")
+        with pytest.raises(RuntimeError, match="abort transport failed"):
+            await coordinator.abort("r1")
+
+        snapshot = coordinator.health()["queue_control"]
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 1
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == ["r1"]
+
+    asyncio.run(_run())
+
+
+def test_coordinator_cancelled_dispatch_rolls_back_credit() -> None:
+    class BlockingSubmitControlPlane(RecordingCoordinatorControlPlane):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def submit_to_stage(self, stage, endpoint, msg) -> None:
+            del stage, endpoint, msg
+            self.entered.set()
+            await self.release.wait()
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = BlockingSubmitControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        submit = asyncio.create_task(coordinator.submit("r1", "one"))
+        await control_plane.entered.wait()
+        submit.cancel()
+        await asyncio.sleep(0)
+        control_plane.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit
+
+        snapshot = coordinator.health()["queue_control"]
+        assert snapshot["active_requests"] == 0
+        assert snapshot["waiting_requests"] == 0
+        assert coordinator._requests == {}
+        assert coordinator._completion_futures == {}
+        assert [msg.request_id for msg in control_plane.aborts] == ["r1"]
+
+    asyncio.run(_run())
+
+
+def test_coordinator_cancelled_dispatch_retains_credit_when_abort_is_uncertain() -> None:
+    class BlockingSubmitAndFailingAbort(RecordingCoordinatorControlPlane):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def submit_to_stage(self, stage, endpoint, msg) -> None:
+            del stage, endpoint, msg
+            self.entered.set()
+            await self.release.wait()
+
+        async def broadcast_abort(self, msg) -> None:
+            del msg
+            raise RuntimeError("abort transport failed")
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = BlockingSubmitAndFailingAbort()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        submit = asyncio.create_task(coordinator.submit("r1", "one"))
+        await control_plane.entered.wait()
+        submit.cancel()
+        await asyncio.sleep(0)
+        control_plane.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await submit
+
+        snapshot = coordinator.health()["queue_control"]
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 0
+        assert list(coordinator._requests) == ["r1"]
+        assert coordinator._completion_futures == {}
+
+    asyncio.run(_run())
+
+
+def test_coordinator_cancelled_waiter_is_removed_without_orphaning_queue() -> None:
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = RecordingCoordinatorControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("active", "one")
+        waiting = asyncio.create_task(coordinator.submit("waiting", "two"))
+        await asyncio.sleep(0)
+        assert coordinator.health()["queue_control"]["waiting_requests"] == 1
+
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+        snapshot = coordinator.health()["queue_control"]
+        assert snapshot["active_requests"] == 1
+        assert snapshot["waiting_requests"] == 0
+        assert list(coordinator._requests) == ["active"]
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == ["active"]
+        await coordinator.abort("active")
+
+    asyncio.run(_run())
+
+
+def test_coordinator_serializes_pregranted_dispatch_batches() -> None:
+    class BlockingOneSubmitControlPlane(RecordingCoordinatorControlPlane):
+        def __init__(self) -> None:
+            super().__init__()
+            self.a_entered = asyncio.Event()
+            self.release_a = asyncio.Event()
+
+        async def submit_to_stage(self, stage, endpoint, msg) -> None:
+            self.submitted.append((stage, endpoint, msg))
+            if msg.request_id == "a":
+                self.a_entered.set()
+                await self.release_a.wait()
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = BlockingOneSubmitControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("x", "active")
+        await coordinator._submit_request("a", "first waiter")
+        await coordinator._submit_request("b", "second waiter")
+        await coordinator._submit_request("d", "third waiter")
+
+        update = asyncio.create_task(
+            coordinator.update_queue_control(
+                QueueControlConfig(max_active_requests=3)
+            )
+        )
+        await control_plane.a_entered.wait()
+        completion = asyncio.create_task(
+            coordinator._handle_completion(
+                CompleteMessage("x", "preprocess", True, result={})
+            )
+        )
+        await asyncio.sleep(0)
+        control_plane.release_a.set()
+        await update
+        await completion
+
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "x",
+            "a",
+            "b",
+            "d",
+        ]
+
+        for request_id in ("a", "b", "d"):
+            await coordinator.abort(request_id)
+
+    asyncio.run(_run())
+
+
+def test_cancelled_queue_update_does_not_abort_dispatched_user_request() -> None:
+    class BlockingSubmitControlPlane(RecordingCoordinatorControlPlane):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def submit_to_stage(self, stage, endpoint, msg) -> None:
+            self.submitted.append((stage, endpoint, msg))
+            if msg.request_id == "waiting":
+                self.entered.set()
+                await self.release.wait()
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        control_plane = BlockingSubmitControlPlane()
+        coordinator.control_plane = control_plane
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("active", "one")
+        await coordinator._submit_request("waiting", "two")
+        update = asyncio.create_task(
+            coordinator.update_queue_control(
+                QueueControlConfig(max_active_requests=2)
+            )
+        )
+        await control_plane.entered.wait()
+        update.cancel()
+        await asyncio.sleep(0)
+        control_plane.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await update
+
+        assert [msg.request_id for _, _, msg in control_plane.submitted] == [
+            "active",
+            "waiting",
+        ]
+        assert control_plane.aborts == []
+        assert coordinator.health()["queue_control"]["active_requests"] == 2
+        await coordinator.abort("active")
+        await coordinator.abort("waiting")
+
+    asyncio.run(_run())
+
+
+def test_coordinator_runtime_credit_telemetry_balances_after_drain(
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "sglang_omni.pipeline.coordinator._emit_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    async def _run() -> None:
+        coordinator = Coordinator(
+            "inproc://complete",
+            "inproc://abort",
+            entry_stage="preprocess",
+            queue_control=QueueControlConfig(max_active_requests=1),
+        )
+        coordinator.control_plane = RecordingCoordinatorControlPlane()
+        coordinator.register_stage("preprocess", "inproc://preprocess")
+
+        await coordinator._submit_request("r1", "one")
+        await coordinator._submit_request("r2", "two")
+        await coordinator._handle_completion(
+            CompleteMessage("r1", "preprocess", True, result={})
+        )
+        await coordinator._handle_completion(
+            CompleteMessage("r2", "preprocess", True, result={})
+        )
+
+        assert coordinator.health()["queue_control"]["active_requests"] == 0
+        assert coordinator.health()["queue_control"]["waiting_requests"] == 0
+
+    asyncio.run(_run())
+
+    acquired = [
+        event for event in events if event["event_name"] == "runtime_credit_acquired"
+    ]
+    released = [
+        event for event in events if event["event_name"] == "runtime_credit_released"
+    ]
+    assert [event["request_id"] for event in acquired] == ["r1", "r2"]
+    assert [event["request_id"] for event in released] == ["r1", "r2"]
+    assert all(
+        {
+            "scope",
+            "request_class",
+            "active_requests",
+            "waiting_requests",
+        }
+        <= event["metadata"].keys()
+        for event in acquired + released
+    )
 
 
 def test_admin_resolves_logical_replica_target_to_all_instances() -> None:

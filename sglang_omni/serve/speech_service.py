@@ -354,6 +354,16 @@ class SpeechRequestValidator:
         elif uploaded_voice is None and reference_descriptors is None:
             uploaded_voice = self._resolve_uploaded_voice_reference(request)
 
+        metadata = dict(request.metadata) if request.metadata else {}
+        metadata.update(
+            {
+                "task": "tts",
+                "tts_params": _build_tts_params(
+                    request,
+                    uploaded_voice=uploaded_voice,
+                ),
+            }
+        )
         return GenerateRequest(
             model=request.model or self.default_model,
             prompt=_build_speech_prompt(request, reference_descriptors),
@@ -362,13 +372,7 @@ class SpeechRequestValidator:
             extra_params=_build_extra_params(request),
             stream=request.stream,
             output_modalities=["audio"],
-            metadata={
-                "task": "tts",
-                "tts_params": _build_tts_params(
-                    request,
-                    uploaded_voice=uploaded_voice,
-                ),
-            },
+            metadata=metadata,
         )
 
     async def create_speech_batch(

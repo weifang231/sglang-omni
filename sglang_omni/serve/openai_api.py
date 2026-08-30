@@ -25,9 +25,9 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, suppress
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import (
     Depends,
@@ -93,6 +93,7 @@ from sglang_omni.serve.protocol import (
     RolloutGenerateRequest,
     RolloutSamplingParams,
     SpeechBatchResponse,
+    UpdateQueueControlRequest,
     UpdateWeightFromDiskRequest,
     UpdateWeightsFromDistributedRequest,
     UsageResponse,
@@ -469,6 +470,20 @@ def _register_admin(app: FastAPI, admin_api_key: str | None = None) -> None:
         return _admin_response(
             await client.continue_generation(
                 payload,
+                stages=req.stages,
+                timeout_s=_timeout_or_default(req.timeout_s, 60.0),
+            )
+        )
+
+    @app.post("/update_queue_control", dependencies=[Depends(_auth)])
+    async def update_queue_control(req: UpdateQueueControlRequest) -> JSONResponse:
+        client: Client = app.state.client
+        payload = req.model_dump(exclude={"stages", "timeout_s"})
+        scope = payload.pop("scope", "pipeline")
+        return _admin_response(
+            await client.update_queue_control(
+                payload,
+                scope=scope,
                 stages=req.stages,
                 timeout_s=_timeout_or_default(req.timeout_s, 60.0),
             )
@@ -949,7 +964,7 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         videos = req.videos
 
     # Merge audio config, audios, images, and videos into metadata
-    metadata: dict[str, Any] = {}
+    metadata = dict(req.metadata) if req.metadata else {}
     if req.audio:
         metadata["audio_config"] = req.audio
     if audios:

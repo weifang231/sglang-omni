@@ -24,6 +24,8 @@ class RequestInfo:
     state: RequestState = RequestState.PENDING
     current_stage: str | None = None
     terminal_stages: set[str] | None = None
+    request_class: str | None = None
+    first_output_deadline_unix_s: float | None = None
     result: Any = None
     error: str | None = None
 

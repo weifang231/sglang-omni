@@ -168,6 +168,11 @@ def _build_stage_groups(
             is_stream_receiver=stage_cfg.name in stream_receivers,
             can_accept_stream_before_payload=stage_cfg.can_accept_stream_before_payload,
             disable_direct_cuda_ipc_payload=stage_cfg.disable_direct_cuda_ipc_payload,
+            queue_control=(
+                stage_cfg.queue_control.model_dump()
+                if stage_cfg.queue_control is not None
+                else None
+            ),
             replica_topology=replica_topology.to_dict(),
         )
         if tp_size == 1:
@@ -505,6 +510,7 @@ class MultiProcessPipelineRunner:
                 replica_topology=prep.replica_topology,
                 logical_process_plan=prep.logical_process_plan,
                 max_in_flight=max_in_flight,
+                queue_control=self._config.queue_control,
             )
             if max_in_flight is not None:
                 logger.info(

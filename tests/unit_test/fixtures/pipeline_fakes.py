@@ -451,12 +451,14 @@ def make_stage_payload(
     request_id: str = "req-1",
     inputs: Any | None = None,
     params: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> StagePayload:
     return StagePayload(
         request_id=request_id,
         request=OmniRequest(
             inputs={"text": "hello"} if inputs is None else inputs,
             params=params or {},
+            metadata=metadata or {},
         ),
         data={} if data is None else data,
     )
