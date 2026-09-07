@@ -90,11 +90,14 @@ def test_runtime_queue_snapshot_schema() -> None:
     queue.enqueue("active", "one", _metadata("text", 1.0))
     queue.enqueue("waiting", "two", _metadata("text", 2.0))
 
-    assert queue.snapshot() == {
+    snapshot = queue.snapshot()
+    assert snapshot == {
+        **snapshot,
         "discipline": "edf",
         "max_active_requests": 2,
         "max_waiting_requests": None,
         "class_limits": {"text": 1},
+        "class_limit_mode": "hard_limit",
         "trust_request_metadata": True,
         "active_requests": 1,
         "waiting_requests": 1,
@@ -102,6 +105,11 @@ def test_runtime_queue_snapshot_schema() -> None:
         "waiting_by_class": {"text": 1},
         "waiting_rejected_total": 0,
     }
+    assert snapshot["runtime_id"]
+    assert snapshot["snapshot_sequence"] == 1
+    assert snapshot["config_generation"] == 0
+    assert len(snapshot["queue_control_config_fingerprint"]) == 64
+    assert snapshot["admission"]["enabled"] is False
 
 
 def test_waiting_limit_excludes_active_requests_and_rejects_only_new_waiters() -> None:
@@ -217,3 +225,98 @@ def test_invalid_deadline_metadata_is_rejected(deadline: object) -> None:
             "one",
             {FIRST_OUTPUT_DEADLINE_METADATA_KEY: deadline},
         )
+
+
+def _admission_config(*, enforce: bool = True) -> dict[str, object]:
+    return {
+        "enabled": True,
+        "enforce": enforce,
+        "classes": {
+            "text": {
+                "effective_k": 1,
+                "mu": 1.0,
+                "service_samples_s": [0.01, 0.02, 0.03],
+                "gamma": 0.5,
+            }
+        },
+    }
+
+
+def test_admission_rejects_expired_deadline() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=1,
+        discipline="edf",
+        trust_request_metadata=True,
+        admission=_admission_config(),
+        clock=lambda: 100.0,
+    )
+
+    with pytest.raises(QueueFullError):
+        queue.enqueue("late", "one", _metadata("text", 99.0))
+
+    snapshot = queue.snapshot()
+    assert snapshot["active_requests"] == 0
+    assert snapshot["admission"]["rejected_total"] == 1
+    assert snapshot["admission"]["decision_reason_counts"] == {"deadline_expired": 1}
+
+
+def test_admission_shadow_mode_records_without_rejecting() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=1,
+        discipline="fifo",
+        trust_request_metadata=True,
+        admission=_admission_config(enforce=False),
+        clock=lambda: 100.0,
+    )
+
+    dispatched = queue.enqueue("late", "one", _metadata("text", 99.0))
+
+    assert [item.request_id for item in dispatched] == ["late"]
+    snapshot = queue.snapshot()
+    assert snapshot["admission"]["admitted_total"] == 1
+    assert snapshot["admission"]["would_reject_decisions_total"] == 1
+    assert snapshot["admission"]["shadow_would_reject_decisions_total"] == 1
+
+
+def test_admission_recheck_evicts_waiters_after_deadline_expires() -> None:
+    now = 100.0
+
+    def clock() -> float:
+        return now
+
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=1,
+        discipline="edf",
+        trust_request_metadata=True,
+        admission=_admission_config(),
+        clock=clock,
+    )
+
+    queue.enqueue("active", "one", _metadata("text", 101.0))
+    queue.enqueue("waiter", "two", _metadata("text", 102.0))
+    now = 103.0
+    rejections = queue.recheck_admission()
+
+    assert [rejection.item.request_id for rejection in rejections] == ["waiter"]
+    assert queue.snapshot()["waiting_requests"] == 0
+
+
+def test_soft_reservation_allows_borrowing_idle_class_share() -> None:
+    queue = RuntimeCreditQueue[str](
+        max_active_requests=2,
+        class_limits={"text": 1, "speech": 1},
+        class_limit_mode="soft_reservation",
+        trust_request_metadata=True,
+    )
+
+    assert [
+        item.request_id for item in queue.enqueue("t1", "one", _metadata("text"))
+    ] == ["t1"]
+    assert [
+        item.request_id for item in queue.enqueue("t2", "two", _metadata("text"))
+    ] == ["t2"]
+
+    snapshot = queue.snapshot()
+    assert snapshot["active_by_class"] == {"text": 2}
+    assert snapshot["soft_reservation"]["reserved_dispatch_total"] == 1
+    assert snapshot["soft_reservation"]["borrowed_dispatch_total"] == 1

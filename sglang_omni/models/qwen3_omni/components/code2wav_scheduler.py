@@ -327,7 +327,14 @@ class Code2WavScheduler(StreamingVocoderBase[Code2WavStreamState, "list[int]"]):
 
     def _runtime_tick(self) -> None:
         if self._runtime_state_channel.enabled:
-            self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
+            start_ns = self._runtime_state_channel.timing_start_ns()
+            try:
+                self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
+            finally:
+                self._runtime_state_channel.record_timing_elapsed_ns(
+                    "vocoder_runtime_tick_ns",
+                    start_ns,
+                )
 
     def create_stream_state(self, request_id: str) -> Code2WavStreamState:
         del request_id

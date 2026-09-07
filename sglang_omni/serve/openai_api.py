@@ -23,9 +23,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import aclosing, suppress
 from typing import Any
 
@@ -63,6 +64,10 @@ from sglang_omni.http.admin_auth import (
     resolve_admin_api_key,
 )
 from sglang_omni.http.favicon import register_favicon
+from sglang_omni.runtime_queue import (
+    FIRST_OUTPUT_DEADLINE_METADATA_KEY,
+    PLAYBACK_BUFFER_MS_METADATA_KEY,
+)
 from sglang_omni.serve.generation_params import (
     record_explicit_generation_params as _record_explicit_generation_params,
 )
@@ -111,6 +116,10 @@ from sglang_omni.serve.speech_errors import (
 from sglang_omni.serve.speech_limits import (
     MAX_VOICE_UPLOAD_BODY_BYTES,
     MAX_VOICE_UPLOAD_BYTES,
+)
+from sglang_omni.serve.scheduling_metadata import (
+    MAX_PLAYBACK_BUFFER_MS,
+    scheduling_metadata_from_headers as _scheduling_metadata_from_headers,
 )
 from sglang_omni.serve.speech_service import SpeechRequestValidator
 from sglang_omni.serve.speech_voices import SpeakerSampleStore
@@ -666,7 +675,9 @@ def _common_model_info_value(
 
 def _register_chat_completions(app: FastAPI) -> None:
     @app.post("/v1/chat/completions")
-    async def chat_completions(req: ChatCompletionRequest) -> Response:
+    async def chat_completions(
+        req: ChatCompletionRequest, request: Request
+    ) -> Response:
         client: Client = app.state.client
         default_model: str = app.state.model_name
 
@@ -675,7 +686,7 @@ def _register_chat_completions(app: FastAPI) -> None:
         created = int(time.time())
         model = req.model or default_model
 
-        gen_req = _build_chat_generate_request(req)
+        gen_req = _build_chat_generate_request(req, headers=request.headers)
 
         # Determine audio format from request
         audio_format = "wav"
@@ -914,7 +925,11 @@ def _explicit_generation_params(request: Any) -> list[str]:
     )
 
 
-def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
+def _build_chat_generate_request(
+    req: ChatCompletionRequest,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> GenerateRequest:
     """Convert a ChatCompletionRequest into a client GenerateRequest."""
     # Parse stop sequences
     stop: list[str] = []
@@ -965,6 +980,7 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
 
     # Merge audio config, audios, images, and videos into metadata
     metadata = dict(req.metadata) if req.metadata else {}
+    metadata.update(_scheduling_metadata_from_headers(headers))
     if req.audio:
         metadata["audio_config"] = req.audio
     if audios:
@@ -1261,6 +1277,7 @@ def _register_speech(app: FastAPI) -> None:
                 reference_descriptors=prepared.reference_descriptors,
                 uploaded_voice=prepared.uploaded_voice,
             )
+            gen_req.metadata.update(_scheduling_metadata_from_headers(request.headers))
         except json.JSONDecodeError:
             return speech_error_response(
                 bad_request("speech request body must be valid JSON")
@@ -1426,6 +1443,30 @@ def _speech_pcm_chunk_bytes(
     return audio_bytes, emitted_samples, sample_rate
 
 
+def _playback_buffer_ms_from_metadata(metadata: Mapping[str, Any]) -> float:
+    raw = metadata.get(PLAYBACK_BUFFER_MS_METADATA_KEY)
+    if raw is None or isinstance(raw, bool):
+        return 0.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(value) or value <= 0.0:
+        return 0.0
+    return min(value, MAX_PLAYBACK_BUFFER_MS)
+
+
+def _first_output_deadline_reached(metadata: Mapping[str, Any]) -> bool:
+    raw = metadata.get(FIRST_OUTPUT_DEADLINE_METADATA_KEY)
+    if raw is None or isinstance(raw, bool):
+        return False
+    try:
+        deadline_unix_s = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(deadline_unix_s) and time.time() >= deadline_unix_s
+
+
 async def _speech_audio_response(
     request: Request,
     client: Client,
@@ -1436,10 +1477,12 @@ async def _speech_audio_response(
     """Build a raw PCM stream after deriving headers from the first audio chunk."""
     emitted_samples = 0
     chunk_stream = client.generate(gen_req, request_id=request_id)
-    first_audio_bytes: bytes | None = None
+    initial_audio_bytes: list[bytes] = []
+    initial_audio_samples = 0
     stream_sample_rate: int | None = None
     stream_completed = False
     stream_closed = False
+    playback_buffer_ms = _playback_buffer_ms_from_metadata(gen_req.metadata)
     disconnect_task = asyncio.create_task(_wait_for_request_disconnect(request))
     next_chunk_task: asyncio.Task[Any] | None = None
 
@@ -1465,17 +1508,32 @@ async def _speech_audio_response(
             if chunk.audio_data is None:
                 continue
 
-            first_audio_bytes, emitted_samples, stream_sample_rate = (
-                _speech_pcm_chunk_bytes(
-                    chunk,
-                    emitted_samples=emitted_samples,
-                    speed=speed,
-                )
+            audio_bytes, emitted_samples, sample_rate = _speech_pcm_chunk_bytes(
+                chunk,
+                emitted_samples=emitted_samples,
+                speed=speed,
             )
-            if first_audio_bytes is not None:
+            if audio_bytes is None:
+                continue
+            if stream_sample_rate is None:
+                stream_sample_rate = sample_rate
+            elif sample_rate != stream_sample_rate:
+                raise RuntimeError(
+                    "Raw PCM speech stream sample rate changed from "
+                    f"{stream_sample_rate} to {sample_rate}"
+                )
+            initial_audio_bytes.append(audio_bytes)
+            initial_audio_samples += len(audio_bytes) // 2
+            target_samples = math.ceil(playback_buffer_ms * stream_sample_rate / 1000.0)
+            if (
+                playback_buffer_ms <= 0.0
+                or initial_audio_samples >= target_samples
+                or chunk.finish_reason is not None
+                or _first_output_deadline_reached(gen_req.metadata)
+            ):
                 break
 
-        if first_audio_bytes is None or stream_sample_rate is None:
+        if not initial_audio_bytes or stream_sample_rate is None:
             raise RuntimeError("No audio output generated from the pipeline.")
     except asyncio.CancelledError:
         if not stream_closed:
@@ -1497,7 +1555,8 @@ async def _speech_audio_response(
         nonlocal emitted_samples
         active_request = True
         try:
-            yield first_audio_bytes
+            for audio_bytes in initial_audio_bytes:
+                yield audio_bytes
 
             async for chunk in chunk_stream:
                 if chunk.audio_data is None:

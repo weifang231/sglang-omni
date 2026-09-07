@@ -17,6 +17,7 @@ from sglang_omni.config import AudioChunkingConfig
 from sglang_omni.serve import speech_to_text
 from sglang_omni.serve.openai_errors import is_bad_request_error
 from sglang_omni.serve.protocol import TranscriptionResponse, TranscriptionUsage
+from sglang_omni.serve.scheduling_metadata import scheduling_metadata_from_headers
 from sglang_omni.serve.transcription_adapters import TranscriptionAdapter
 from sglang_omni.serve.transcription_chunking import (
     ChunkPlan,
@@ -119,6 +120,7 @@ def register_transcriptions(app: FastAPI) -> None:
                 max_new_tokens=form.max_new_tokens,
                 stream=True,
             )
+            gen_req.metadata.update(scheduling_metadata_from_headers(request.headers))
             return await speech_to_text.create_speech_to_text_streaming_response(
                 request=request,
                 client=client,
@@ -176,6 +178,7 @@ def register_transcriptions(app: FastAPI) -> None:
                 max_new_tokens=form.max_new_tokens,
                 segment_timestamps=segment_timestamps,
             )
+            gen_req.metadata.update(scheduling_metadata_from_headers(request.headers))
             result = await speech_to_text.complete_speech_to_text_request(
                 client,
                 gen_req,

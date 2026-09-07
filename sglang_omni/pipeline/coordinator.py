@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -35,7 +35,11 @@ from sglang_omni.proto import (
     SubmitMessage,
     is_update_action,
 )
-from sglang_omni.runtime_queue import RuntimeCreditQueue, RuntimeQueueItem
+from sglang_omni.runtime_queue import (
+    RuntimeCreditQueue,
+    RuntimeQueueAdmissionRejection,
+    RuntimeQueueItem,
+)
 from sglang_omni.utils.runtime_state import RuntimeStateChannel
 
 logger = logging.getLogger(__name__)
@@ -151,6 +155,7 @@ class Coordinator:
             stage_id="pipeline",
         )
         self._runtime_dispatch_lock = asyncio.Lock()
+        self._runtime_control_task: asyncio.Task[None] | None = None
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -191,11 +196,27 @@ class Coordinator:
         """Start the coordinator."""
         await self.control_plane.start()
         self._running = True
+        if (
+            self._runtime_queue is not None
+            and self._runtime_state_channel.enabled
+            and self._runtime_control_task is None
+        ):
+            self._runtime_control_task = asyncio.create_task(
+                self._runtime_control_loop(),
+                name="coordinator-runtime-control-loop",
+            )
         logger.info("Coordinator started")
 
     async def stop(self) -> None:
         """Stop the coordinator."""
         self._running = False
+        if self._runtime_control_task is not None:
+            self._runtime_control_task.cancel()
+            try:
+                await self._runtime_control_task
+            except asyncio.CancelledError:
+                pass
+            self._runtime_control_task = None
         self.control_plane.close()
         logger.info("Coordinator stopped")
 
@@ -582,7 +603,8 @@ class Coordinator:
                 metadata={
                     "scope": "pipeline",
                     "request_class": request_class,
-                    "reason": "waiting_queue_full",
+                    "reason": self._runtime_queue.last_rejection_reason
+                    or "waiting_queue_full",
                     "active_requests": snapshot["active_requests"],
                     "waiting_requests": snapshot["waiting_requests"],
                     "max_waiting_requests": snapshot["max_waiting_requests"],
@@ -787,6 +809,11 @@ class Coordinator:
             if hasattr(queue_control, "model_dump")
             else dict(queue_control)
         )
+        values.setdefault(
+            "max_active_requests", self._runtime_queue.max_active_requests
+        )
+        values.setdefault("class_limits", self._runtime_queue.class_limits)
+        values.setdefault("discipline", self._runtime_queue.discipline)
         values.setdefault("class_metadata_key", self._runtime_queue.class_metadata_key)
         values.setdefault(
             "deadline_metadata_key", self._runtime_queue.deadline_metadata_key
@@ -795,6 +822,9 @@ class Coordinator:
             values["max_waiting_requests"] = self._runtime_queue.max_waiting_requests
         # Trust is a startup-time boundary, not a live scheduling knob.
         values["trust_request_metadata"] = self._runtime_queue.trust_request_metadata
+        values.setdefault("class_limit_mode", self._runtime_queue.class_limit_mode)
+        values.setdefault("admission", self._runtime_queue.admission)
+        values.setdefault("online_allocator", self._runtime_queue.online_allocator)
         configured_active = values.get("max_active_requests")
         if self.max_in_flight is not None and (
             configured_active is None or configured_active > self.max_in_flight
@@ -823,7 +853,12 @@ class Coordinator:
             max_waiting_requests=replacement.max_waiting_requests,
             class_limits=replacement.class_limits,
             discipline=replacement.discipline,
+            class_limit_mode=replacement.class_limit_mode,
+            admission=replacement.admission,
+            online_allocator=replacement.online_allocator,
         )
+        rejections = self._runtime_queue.recheck_admission()
+        await self._reject_runtime_queue_rechecks(rejections)
         await self._dispatch_runtime_items(dispatched)
         self._publish_runtime_queue_snapshot(force=True)
         return self._runtime_queue.snapshot()
@@ -835,6 +870,118 @@ class Coordinator:
             self._runtime_queue.snapshot,
             force=force,
         )
+
+    async def _runtime_control_loop(self) -> None:
+        while self._running:
+            start_ns = self._runtime_state_channel.timing_start_ns()
+            try:
+                await self._apply_runtime_control_file_once()
+                self._publish_runtime_queue_snapshot()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Coordinator ignored invalid runtime control update",
+                    exc_info=True,
+                )
+            finally:
+                self._runtime_state_channel.record_timing_elapsed_ns(
+                    "coordinator_control_loop_ns",
+                    start_ns,
+                )
+            await asyncio.sleep(0.05)
+
+    async def _apply_runtime_control_file_once(self) -> None:
+        if self._runtime_queue is None:
+            return
+        control = self._runtime_state_channel.read_control_if_changed()
+        if control is None:
+            return
+        payload = self._queue_control_payload_from_runtime_control(control)
+        if payload is None:
+            return
+        await self.update_queue_control(payload)
+
+    @staticmethod
+    def _queue_control_payload_from_runtime_control(
+        control: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if "pipeline_queue_control" in control:
+            payload = control["pipeline_queue_control"]
+        elif (
+            "queue_control" in control
+            and control.get("scope", "pipeline") == "pipeline"
+        ):
+            payload = control["queue_control"]
+        elif "generation_cap" in control or "pp_max_micro_batch_size" in control:
+            payload = {
+                "max_active_requests": control.get(
+                    "generation_cap",
+                    control.get("pp_max_micro_batch_size"),
+                )
+            }
+        elif any(
+            key in control
+            for key in (
+                "discipline",
+                "max_active_requests",
+                "max_waiting_requests",
+                "class_limits",
+                "class_limit_mode",
+                "admission",
+                "online_allocator",
+            )
+        ):
+            payload = control
+        else:
+            return None
+        if payload is False or payload is None:
+            return None
+        if not isinstance(payload, Mapping):
+            raise ValueError("runtime queue-control payload must be an object")
+        return dict(payload)
+
+    async def _reject_runtime_queue_rechecks(
+        self,
+        rejections: Sequence[RuntimeQueueAdmissionRejection[_PendingRequestDispatch]],
+    ) -> None:
+        if self._runtime_queue is None:
+            return
+        for rejection in rejections:
+            request_id = rejection.item.request_id
+            info = self._requests.get(request_id)
+            if info is not None:
+                info.state = RequestState.FAILED
+                info.error = rejection.decision.reason
+            self._reject_completion_future(request_id, QueueFullError())
+            stream_queue = self._stream_queues.get(request_id)
+            if stream_queue is not None:
+                await stream_queue.put(
+                    CompleteMessage(
+                        request_id=request_id,
+                        from_stage="coordinator",
+                        success=False,
+                        error=QueueFullError.MESSAGE,
+                    )
+                )
+            self._requests.pop(request_id, None)
+            self._completion_futures.pop(request_id, None)
+            self._stream_queues.pop(request_id, None)
+            self._partial_results.pop(request_id, None)
+            snapshot = self._runtime_queue.snapshot()
+            _emit_event(
+                request_id=request_id,
+                stage="coordinator",
+                event_name="runtime_queue_rejected",
+                metadata={
+                    "scope": "pipeline",
+                    "request_class": rejection.item.request_class,
+                    "reason": rejection.decision.reason,
+                    "phase": rejection.decision.phase,
+                    "active_requests": snapshot["active_requests"],
+                    "waiting_requests": snapshot["waiting_requests"],
+                },
+            )
 
     def _request_id_is_reserved(self, request_id: str) -> bool:
         """Return whether any coordinator owner still holds this request ID."""

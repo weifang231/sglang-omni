@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 import numpy as np
 
@@ -32,6 +34,36 @@ from sglang_omni.client.types import (
 )
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import OmniRequest, RequestState, StreamMessage
+from sglang_omni.runtime_queue import PLAYBACK_BUFFER_MS_METADATA_KEY
+
+MAX_PLAYBACK_BUFFER_MS = 5000.0
+
+
+def _playback_buffer_ms(metadata: dict[str, Any]) -> float:
+    raw = metadata.get(PLAYBACK_BUFFER_MS_METADATA_KEY)
+    if raw is None:
+        return 0.0
+    if isinstance(raw, bool):
+        return 0.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not np.isfinite(value) or value <= 0.0:
+        return 0.0
+    return min(value, MAX_PLAYBACK_BUFFER_MS)
+
+
+def _audio_sample_count(audio_data: Any) -> int:
+    try:
+        audio = to_numpy(audio_data)
+    except (TypeError, ValueError):
+        return 0
+    if audio.ndim > 1:
+        audio = audio.squeeze()
+    if audio.ndim > 1:
+        return int(max(audio.shape))
+    return int(audio.shape[-1]) if audio.ndim else 0
 
 
 class Client:
@@ -172,9 +204,39 @@ class Client:
         need to touch numpy / raw bytes.
         """
         streamed_text = ""
+        playback_buffer_ms = _playback_buffer_ms(request.metadata)
+        playback_released = playback_buffer_ms <= 0.0
+        buffered_audio_chunks: list[GenerateChunk] = []
+        buffered_audio_samples = 0
         generate_stream = self.generate(request, request_id=request_id)
         async with aclosing(generate_stream):
             async for chunk in generate_stream:
+                if (
+                    chunk.modality == "audio"
+                    and chunk.audio_data is not None
+                    and not playback_released
+                ):
+                    buffered_audio_chunks.append(chunk)
+                    sample_rate = chunk.sample_rate or DEFAULT_SAMPLE_RATE
+                    buffered_audio_samples += _audio_sample_count(chunk.audio_data)
+                    target_samples = math.ceil(
+                        playback_buffer_ms * sample_rate / 1000.0
+                    )
+                    if (
+                        buffered_audio_samples < target_samples
+                        and chunk.finish_reason is None
+                    ):
+                        continue
+                    playback_released = True
+                    for buffered_chunk in buffered_audio_chunks:
+                        yield self._completion_stream_chunk_from_generate(
+                            buffered_chunk,
+                            request_id=request_id,
+                            audio_format=audio_format,
+                        )
+                    buffered_audio_chunks.clear()
+                    continue
+
                 audio_b64: str | None = None
                 if chunk.modality == "audio" and chunk.audio_data is not None:
                     audio_b64 = audio_to_base64(
@@ -199,6 +261,37 @@ class Client:
                     usage=chunk.usage,
                     stage_name=chunk.stage_name,
                 )
+        if buffered_audio_chunks:
+            for buffered_chunk in buffered_audio_chunks:
+                yield self._completion_stream_chunk_from_generate(
+                    buffered_chunk,
+                    request_id=request_id,
+                    audio_format=audio_format,
+                )
+
+    def _completion_stream_chunk_from_generate(
+        self,
+        chunk: GenerateChunk,
+        *,
+        request_id: str,
+        audio_format: str,
+    ) -> CompletionStreamChunk:
+        audio_b64: str | None = None
+        if chunk.modality == "audio" and chunk.audio_data is not None:
+            audio_b64 = audio_to_base64(
+                chunk.audio_data,
+                sample_rate=chunk.sample_rate or DEFAULT_SAMPLE_RATE,
+                output_format=audio_format,
+            )
+        return CompletionStreamChunk(
+            request_id=request_id,
+            text=chunk.text,
+            modality=chunk.modality,
+            audio_b64=audio_b64,
+            finish_reason=chunk.finish_reason,
+            usage=chunk.usage,
+            stage_name=chunk.stage_name,
+        )
 
     # ------------------------------------------------------------------
     # High-level: text-to-speech

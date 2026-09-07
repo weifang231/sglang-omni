@@ -20,6 +20,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from sglang_omni.utils.runtime_timing import RuntimeTimingRecorder
+
 logger = logging.getLogger(__name__)
 
 RUNTIME_METRICS_DIR_ENV = "OMNI_RUNTIME_METRICS_DIR"
@@ -86,10 +88,19 @@ class RuntimeStateChannel:
         self._last_control_signature: tuple[int, int, int] | None = None
         self._lock = threading.Lock()
         self._warned_failures: set[str] = set()
+        self._timing_recorder = RuntimeTimingRecorder(
+            engine=engine,
+            component=component,
+            stage_id=self._stage_id,
+        )
 
     @property
     def enabled(self) -> bool:
-        return self._metrics_dir is not None or self._control_file is not None
+        return (
+            self._metrics_dir is not None
+            or self._control_file is not None
+            or self._timing_recorder.enabled
+        )
 
     @property
     def metrics_enabled(self) -> bool:
@@ -97,6 +108,18 @@ class RuntimeStateChannel:
 
     def set_stage_id(self, stage_id: str | int) -> None:
         self._stage_id = stage_id
+        self._timing_recorder.set_stage_id(stage_id)
+
+    def timing_start_ns(self) -> int | None:
+        return self._timing_recorder.start_ns()
+
+    def record_timing_elapsed_ns(
+        self, family: str, start_ns: int | None
+    ) -> None:
+        self._timing_recorder.record_elapsed_ns(family, start_ns)
+
+    def record_timing_ns(self, family: str, duration_ns: int) -> None:
+        self._timing_recorder.record_ns(family, duration_ns)
 
     def _safe_name(self, value: Any) -> str:
         normalized = _SAFE_FILENAME_RE.sub("_", str(value)).strip("._")
@@ -121,39 +144,46 @@ class RuntimeStateChannel:
 
     def read_control_if_changed(self, *, force: bool = False) -> dict[str, Any] | None:
         """Return a new valid control object, or ``None`` when unchanged."""
+        start_ns = self._timing_recorder.start_ns()
         path = self._control_file
-        if path is None:
-            return None
-        now = time.monotonic()
-        if (
-            not force
-            and now - self._last_control_poll_s < self._control_poll_interval_s
-        ):
-            return None
-        self._last_control_poll_s = now
         try:
-            stat = path.stat()
-            signature = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-            if not force and signature == self._last_control_signature:
+            if path is None:
                 return None
-            with path.open("r", encoding="utf-8") as handle:
-                control = json.load(handle)
-            if not isinstance(control, dict):
-                raise ValueError("runtime control JSON must be an object")
-        except FileNotFoundError:
-            had_control = self._last_control_signature is not None
-            self._last_control_signature = None
-            return {} if had_control else None
-        except Exception:
-            self._warn_once(
-                "control-read",
-                "Ignoring invalid runtime control file %s",
-                path,
+            now = time.monotonic()
+            if (
+                not force
+                and now - self._last_control_poll_s < self._control_poll_interval_s
+            ):
+                return None
+            self._last_control_poll_s = now
+            try:
+                stat = path.stat()
+                signature = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+                if not force and signature == self._last_control_signature:
+                    return None
+                with path.open("r", encoding="utf-8") as handle:
+                    control = json.load(handle)
+                if not isinstance(control, dict):
+                    raise ValueError("runtime control JSON must be an object")
+            except FileNotFoundError:
+                had_control = self._last_control_signature is not None
+                self._last_control_signature = None
+                return {} if had_control else None
+            except Exception:
+                self._warn_once(
+                    "control-read",
+                    "Ignoring invalid runtime control file %s",
+                    path,
+                )
+                return None
+            self._warned_failures.discard("control-read")
+            self._last_control_signature = signature
+            return control
+        finally:
+            self._timing_recorder.record_elapsed_ns(
+                "runtime_control_read_ns",
+                start_ns,
             )
-            return None
-        self._warned_failures.discard("control-read")
-        self._last_control_signature = signature
-        return control
 
     def maybe_publish(
         self,
@@ -162,52 +192,59 @@ class RuntimeStateChannel:
         force: bool = False,
     ) -> bool:
         """Atomically publish a snapshot when the component interval is due."""
+        start_ns = self._timing_recorder.start_ns()
         destination = self.snapshot_path
-        if destination is None:
-            return False
-        now = time.monotonic()
-        if not force and now - self._last_publish_s < self._publish_interval_s:
-            return False
-        self._last_publish_s = now
         try:
-            fields = dict(fields_factory())
-            payload = {
-                **fields,
-                "timestamp_s": time.time(),
-                "engine": self._engine,
-                "component": self._component,
-                "stage_id": self._stage_id,
-                "pid": os.getpid(),
-            }
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with self._lock:
-                fd, temporary_name = tempfile.mkstemp(
-                    prefix=f".{destination.name}.",
-                    suffix=".tmp",
-                    dir=destination.parent,
-                )
-                temporary = Path(temporary_name)
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                        json.dump(
-                            payload,
-                            handle,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                        handle.write("\n")
-                    os.replace(temporary, destination)
-                finally:
+            if destination is None:
+                return False
+            now = time.monotonic()
+            if not force and now - self._last_publish_s < self._publish_interval_s:
+                return False
+            self._last_publish_s = now
+            try:
+                fields = dict(fields_factory())
+                payload = {
+                    **fields,
+                    "timestamp_s": time.time(),
+                    "engine": self._engine,
+                    "component": self._component,
+                    "stage_id": self._stage_id,
+                    "pid": os.getpid(),
+                }
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with self._lock:
+                    fd, temporary_name = tempfile.mkstemp(
+                        prefix=f".{destination.name}.",
+                        suffix=".tmp",
+                        dir=destination.parent,
+                    )
+                    temporary = Path(temporary_name)
                     try:
-                        temporary.unlink()
-                    except FileNotFoundError:
-                        pass
-        except Exception:
-            self._warn_once(
-                "metrics-write",
-                "Failed to publish runtime metrics snapshot %s",
-                destination,
+                        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                            json.dump(
+                                payload,
+                                handle,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            handle.write("\n")
+                        os.replace(temporary, destination)
+                    finally:
+                        try:
+                            temporary.unlink()
+                        except FileNotFoundError:
+                            pass
+            except Exception:
+                self._warn_once(
+                    "metrics-write",
+                    "Failed to publish runtime metrics snapshot %s",
+                    destination,
+                )
+                return False
+            self._warned_failures.discard("metrics-write")
+            return True
+        finally:
+            self._timing_recorder.record_elapsed_ns(
+                "runtime_publish_ns",
+                start_ns,
             )
-            return False
-        self._warned_failures.discard("metrics-write")
-        return True

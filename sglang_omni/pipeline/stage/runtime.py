@@ -16,7 +16,7 @@ import os
 import queue as _queue_mod
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
 from typing import Any, Literal
@@ -154,6 +154,7 @@ class Stage:
             if self._runtime_queue is not None
             else None
         )
+        self._runtime_control_task: asyncio.Task[None] | None = None
         self._replica_topology = ReplicaTopology.from_dict(replica_topology)
         self._replica_bindings: dict[str, dict[str, int]] = {}
 
@@ -230,6 +231,22 @@ class Stage:
         await self._comm.start()
         self._loop = asyncio.get_running_loop()
         self._running = True
+        if (
+            self._runtime_queue is not None
+            and self._runtime_queue_state_channel is not None
+            and self._runtime_queue_state_channel.enabled
+            and self._runtime_control_task is None
+        ):
+            self._runtime_control_task = asyncio.create_task(
+                self._runtime_control_loop(),
+                name=f"{self.name}-runtime-control-loop",
+            )
+            self._runtime_control_task.add_done_callback(
+                lambda task: self._on_background_task_done(
+                    task,
+                    "runtime control loop",
+                )
+            )
 
         # Start scheduler in dedicated thread
         if self.scheduler is not None:
@@ -274,6 +291,11 @@ class Stage:
     async def stop(self) -> None:
         self._running = False
         cleanup_error: Exception | None = None
+        if self._runtime_control_task is not None:
+            self._runtime_control_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._runtime_control_task
+            self._runtime_control_task = None
 
         def _record_cleanup_error(component: str, exc: Exception) -> None:
             nonlocal cleanup_error
@@ -1131,9 +1153,11 @@ class Stage:
                 self._receive_tasks.add(failure_task)
                 failure_task.add_done_callback(self._receive_tasks.discard)
                 failure_task.add_done_callback(
-                    lambda done, request_id=item.request_id: self._on_background_task_done(
-                        done,
-                        f"dispatch failure response for {request_id}",
+                    lambda done, request_id=item.request_id: (
+                        self._on_background_task_done(
+                            done,
+                            f"dispatch failure response for {request_id}",
+                        )
                     )
                 )
                 continue
@@ -1185,6 +1209,116 @@ class Stage:
             self._runtime_queue.snapshot,
             force=force,
         )
+
+    async def _runtime_control_loop(self) -> None:
+        while self._running:
+            start_ns = self._runtime_queue_state_channel.timing_start_ns()
+            try:
+                await self._apply_runtime_control_file_once()
+                self._publish_runtime_queue_snapshot()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Stage %s ignored invalid runtime control update",
+                    self.name,
+                    exc_info=True,
+                )
+            finally:
+                self._runtime_queue_state_channel.record_timing_elapsed_ns(
+                    "stage_control_loop_ns",
+                    start_ns,
+                )
+            await asyncio.sleep(0.05)
+
+    async def _apply_runtime_control_file_once(self) -> None:
+        if self._runtime_queue is None or self._runtime_queue_state_channel is None:
+            return
+        control = self._runtime_queue_state_channel.read_control_if_changed()
+        if control is None:
+            return
+        payload = self._queue_control_payload_from_runtime_control(control)
+        if payload is None:
+            return
+        max_active_requests = payload.get(
+            "max_active_requests",
+            self._runtime_queue.max_active_requests,
+        )
+        class_limits = payload.get("class_limits", self._runtime_queue.class_limits)
+        discipline = payload.get("discipline", self._runtime_queue.discipline)
+        max_waiting_requests = payload.get("max_waiting_requests")
+        if max_waiting_requests is None:
+            max_waiting_requests = self._runtime_queue.max_waiting_requests
+        dispatched = self._runtime_queue.update(
+            max_active_requests=max_active_requests,
+            max_waiting_requests=max_waiting_requests,
+            class_limits=class_limits,
+            discipline=discipline,
+            class_limit_mode=payload.get(
+                "class_limit_mode",
+                self._runtime_queue.class_limit_mode,
+            ),
+            admission=payload.get("admission", self._runtime_queue.admission),
+            online_allocator=payload.get(
+                "online_allocator",
+                self._runtime_queue.online_allocator,
+            ),
+        )
+        rejections = self._runtime_queue.recheck_admission()
+        for rejection in rejections:
+            await self._send_failure(
+                rejection.item.request_id,
+                QueueFullError.MESSAGE,
+            )
+        self._dispatch_runtime_items(dispatched)
+        self._publish_runtime_queue_snapshot(force=True)
+
+    def _queue_control_payload_from_runtime_control(
+        self,
+        control: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if "stage_queue_control" in control:
+            stage_controls = control["stage_queue_control"]
+            if not isinstance(stage_controls, Mapping):
+                raise ValueError("stage_queue_control must be an object")
+            payload = stage_controls.get(self.name)
+            if payload is None:
+                return None
+        elif (
+            "queue_control" in control
+            and control.get("scope", "pipeline") == "stage"
+            and (
+                "stages" not in control or self.name in set(control.get("stages") or [])
+            )
+        ):
+            payload = control["queue_control"]
+        elif "generation_cap" in control or "pp_max_micro_batch_size" in control:
+            payload = {
+                "max_active_requests": control.get(
+                    "generation_cap",
+                    control.get("pp_max_micro_batch_size"),
+                )
+            }
+        elif any(
+            key in control
+            for key in (
+                "discipline",
+                "max_active_requests",
+                "max_waiting_requests",
+                "class_limits",
+                "class_limit_mode",
+                "admission",
+                "online_allocator",
+            )
+        ):
+            payload = control
+        else:
+            return None
+        if payload is False or payload is None:
+            return None
+        if not isinstance(payload, Mapping):
+            raise ValueError("runtime queue-control payload must be an object")
+        return dict(payload)
 
     async def _on_admin(self, msg: AdminMessage) -> None:
         operation = msg.operation
@@ -1252,6 +1386,10 @@ class Stage:
                     "discipline",
                     self._runtime_queue.discipline,
                 )
+                class_limit_mode = payload.get(
+                    "class_limit_mode",
+                    self._runtime_queue.class_limit_mode,
+                )
                 max_waiting_requests = payload.get("max_waiting_requests")
                 if max_waiting_requests is None:
                     max_waiting_requests = self._runtime_queue.max_waiting_requests
@@ -1260,7 +1398,22 @@ class Stage:
                     max_waiting_requests=max_waiting_requests,
                     class_limits=class_limits,
                     discipline=discipline,
+                    class_limit_mode=class_limit_mode,
+                    admission=payload.get(
+                        "admission",
+                        self._runtime_queue.admission,
+                    ),
+                    online_allocator=payload.get(
+                        "online_allocator",
+                        self._runtime_queue.online_allocator,
+                    ),
                 )
+                rejections = self._runtime_queue.recheck_admission()
+                for rejection in rejections:
+                    await self._send_failure(
+                        rejection.item.request_id,
+                        QueueFullError.MESSAGE,
+                    )
                 self._dispatch_runtime_items(dispatched)
                 self._publish_runtime_queue_snapshot(force=True)
                 return self._admin_result(
@@ -2068,9 +2221,7 @@ class Stage:
             self.scheduler.abort(request_id)
             return
 
-        queued_only = (
-            self._runtime_queue.is_waiting(request_id)
-        )
+        queued_only = self._runtime_queue.is_waiting(request_id)
         self._record_aborted_request_id(request_id)
         self._comm.cleanup(request_id)
         self._clear_request_state(request_id)

@@ -834,10 +834,17 @@ class Qwen3TTSStreamingVocoderScheduler(
     def _runtime_tick(self) -> None:
         if not self._runtime_state_channel.enabled:
             return
-        control = self._runtime_state_channel.read_control_if_changed()
-        if control is not None:
-            self._apply_runtime_control(control)
-        self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
+        start_ns = self._runtime_state_channel.timing_start_ns()
+        try:
+            control = self._runtime_state_channel.read_control_if_changed()
+            if control is not None:
+                self._apply_runtime_control(control)
+            self._runtime_state_channel.maybe_publish(self._runtime_snapshot)
+        finally:
+            self._runtime_state_channel.record_timing_elapsed_ns(
+                "vocoder_runtime_tick_ns",
+                start_ns,
+            )
 
     def warmup_now(self) -> None:
         if not self._async_decode:

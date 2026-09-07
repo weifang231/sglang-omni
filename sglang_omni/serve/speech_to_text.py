@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
+from sglang_omni.admission import QueueFullError
 from sglang_omni.client import (
     Client,
     ClientError,
@@ -222,10 +223,14 @@ async def complete_speech_to_text_request(
     try:
         return await client.completion(gen_req, request_id=request_id)
     except ClientError as exc:
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.exception(error_log_message, request_id)
@@ -480,6 +485,16 @@ async def speech_to_text_stream(
                 if line is not None:
                     yield line
     except Exception as exc:
+        if QueueFullError.matches(exc):
+            logger.warning(
+                "Rejecting %s stream for request %s: %s",
+                operation_name,
+                request_id,
+                QueueFullError.MESSAGE,
+            )
+            payload = {"type": "error", "error": {"message": QueueFullError.MESSAGE}}
+            yield f"data: {json.dumps(payload)}\n\n"
+            return
         logger.exception(
             "Error streaming %s for request %s", operation_name, request_id
         )
@@ -518,11 +533,15 @@ async def create_speech_to_text_streaming_response(
         )
     except ClientError as exc:
         await close_async_iterator_if_supported(chunk_stream)
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         await close_async_iterator_if_supported(chunk_stream)
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.exception(

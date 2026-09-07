@@ -179,9 +179,13 @@ class QueueControlConfig(BaseModel):
     max_active_requests: int | None = Field(default=None, ge=0)
     max_waiting_requests: int | None = Field(default=None, ge=0)
     class_limits: dict[str, int] = Field(default_factory=dict)
+    class_limit_mode: Literal["hard_limit", "soft_reservation"] = "hard_limit"
     trust_request_metadata: bool = False
     class_metadata_key: str = "sglang_omni.request_class"
     deadline_metadata_key: str = "sglang_omni.first_output_deadline_unix_s"
+    admission_correlation_id_metadata_key: str = "sglang_omni.admission_correlation_id"
+    admission: dict[str, Any] | None | bool = None
+    online_allocator: dict[str, Any] | None = None
 
     @field_validator("max_active_requests", "max_waiting_requests", mode="before")
     @classmethod
@@ -222,7 +226,11 @@ class QueueControlConfig(BaseModel):
             normalized[request_class] = limit
         return normalized
 
-    @field_validator("class_metadata_key", "deadline_metadata_key")
+    @field_validator(
+        "class_metadata_key",
+        "deadline_metadata_key",
+        "admission_correlation_id_metadata_key",
+    )
     @classmethod
     def _validate_metadata_key(cls, value: str) -> str:
         value = value.strip()
@@ -235,10 +243,20 @@ class QueueControlConfig(BaseModel):
             raise ValueError(
                 "queue_control requires max_active_requests or class_limits"
             )
+        if self.class_limit_mode == "soft_reservation":
+            if self.max_active_requests is None:
+                raise ValueError(
+                    "queue_control soft_reservation requires max_active_requests"
+                )
+            if not self.class_limits:
+                raise ValueError("queue_control soft_reservation requires class_limits")
+            if sum(self.class_limits.values()) > self.max_active_requests:
+                raise ValueError(
+                    "queue_control soft_reservation shares must not exceed "
+                    "max_active_requests"
+                )
         if not self.trust_request_metadata and self.discipline == "edf":
-            raise ValueError(
-                "queue_control EDF requires trust_request_metadata=true"
-            )
+            raise ValueError("queue_control EDF requires trust_request_metadata=true")
         if not self.trust_request_metadata and any(
             request_class != "default" for request_class in self.class_limits
         ):
@@ -246,6 +264,24 @@ class QueueControlConfig(BaseModel):
                 "queue_control non-default class limits require "
                 "trust_request_metadata=true"
             )
+        if self.admission not in (None, False):
+            if not isinstance(self.admission, dict):
+                raise ValueError("queue_control.admission must be an object or false")
+            if not self.trust_request_metadata:
+                raise ValueError(
+                    "queue_control admission requires trust_request_metadata=true"
+                )
+            if (
+                self.admission.get("enabled", True)
+                and self.admission.get(
+                    "enforce",
+                    True,
+                )
+                and self.discipline != "edf"
+            ):
+                raise ValueError(
+                    "queue_control admission enforcement requires discipline='edf'"
+                )
 
 
 # Note (kaige): validation follows the context each layer owns. StageConfig and

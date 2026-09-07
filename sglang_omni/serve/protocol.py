@@ -626,6 +626,9 @@ class UpdateQueueControlRequest(AdminRequestBase):
     max_active_requests: int | None = Field(default=None, ge=0)
     max_waiting_requests: int | None = Field(default=None, ge=0)
     class_limits: dict[str, int] = Field(default_factory=dict)
+    class_limit_mode: Literal["hard_limit", "soft_reservation"] = "hard_limit"
+    admission: dict[str, Any] | None | bool = None
+    online_allocator: dict[str, Any] | None = None
 
     @field_validator("max_active_requests", "max_waiting_requests", mode="before")
     @classmethod
@@ -645,10 +648,30 @@ class UpdateQueueControlRequest(AdminRequestBase):
 
     @model_validator(mode="after")
     def _validate_limits(self) -> UpdateQueueControlRequest:
-        if self.max_active_requests is None and not self.class_limits:
+        if (
+            self.max_active_requests is None
+            and not self.class_limits
+            and self.admission in (None, False)
+            and self.online_allocator is None
+        ):
             raise ValueError(
-                "update_queue_control requires max_active_requests or class_limits"
+                "update_queue_control requires max_active_requests, class_limits, "
+                "admission, or online_allocator"
             )
+        if self.class_limit_mode == "soft_reservation":
+            if self.max_active_requests is None:
+                raise ValueError("soft_reservation requires max_active_requests")
+            if not self.class_limits:
+                raise ValueError("soft_reservation requires class_limits")
+            if sum(self.class_limits.values()) > self.max_active_requests:
+                raise ValueError(
+                    "soft_reservation shares must not exceed max_active_requests"
+                )
+        if self.admission not in (None, False) and not isinstance(
+            self.admission,
+            dict,
+        ):
+            raise ValueError("admission must be an object or false")
         return self
 
 
