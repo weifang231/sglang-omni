@@ -70,3 +70,34 @@ def test_runtime_state_channel_is_opt_in_and_atomic(tmp_path, monkeypatch) -> No
     assert timing["families"]["runtime_control_read_ns"]
     assert timing["families"]["unit_loop_ns"] == [1234]
     assert list(timing_dir.glob("*.tmp")) == []
+
+
+def test_runtime_state_skips_unchanged_snapshot_until_heartbeat(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setenv(RUNTIME_METRICS_DIR_ENV, str(metrics_dir))
+    monkeypatch.delenv(RUNTIME_CONTROL_FILE_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_TIMING_DIR_ENV, raising=False)
+    channel = RuntimeStateChannel(
+        engine="sglang-omni",
+        component="scheduler",
+        stage_id="talker/ar",
+        publish_interval_s=0,
+        unchanged_publish_interval_s=999.0,
+    )
+
+    assert channel.maybe_publish(lambda: {"running_requests": 2}) is True
+    snapshot_path = channel.snapshot_path
+    assert snapshot_path is not None
+    first_snapshot = json.loads(snapshot_path.read_text())
+
+    assert channel.maybe_publish(lambda: {"running_requests": 2}) is False
+    assert json.loads(snapshot_path.read_text()) == first_snapshot
+
+    assert channel.maybe_publish(lambda: {"running_requests": 3}) is True
+    updated_snapshot = json.loads(snapshot_path.read_text())
+    assert updated_snapshot["running_requests"] == 3
+
+    assert channel.maybe_publish(lambda: {"running_requests": 3}, force=True) is True

@@ -29,6 +29,7 @@ RUNTIME_CONTROL_FILE_ENV = "OMNI_RUNTIME_CONTROL_FILE"
 
 _DEFAULT_PUBLISH_INTERVAL_S = 0.25
 _DEFAULT_CONTROL_POLL_INTERVAL_S = 0.10
+_DEFAULT_UNCHANGED_PUBLISH_INTERVAL_S = 2.0
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -73,6 +74,7 @@ class RuntimeStateChannel:
         stage_id: str | int | None = None,
         publish_interval_s: float = _DEFAULT_PUBLISH_INTERVAL_S,
         control_poll_interval_s: float = _DEFAULT_CONTROL_POLL_INTERVAL_S,
+        unchanged_publish_interval_s: float = _DEFAULT_UNCHANGED_PUBLISH_INTERVAL_S,
     ) -> None:
         metrics_dir = os.environ.get(RUNTIME_METRICS_DIR_ENV)
         control_file = os.environ.get(RUNTIME_CONTROL_FILE_ENV)
@@ -83,7 +85,13 @@ class RuntimeStateChannel:
         self._stage_id: str | int = "unknown" if stage_id is None else stage_id
         self._publish_interval_s = max(float(publish_interval_s), 0.0)
         self._control_poll_interval_s = max(float(control_poll_interval_s), 0.0)
+        self._unchanged_publish_interval_s = max(
+            float(unchanged_publish_interval_s),
+            0.0,
+        )
         self._last_publish_s = float("-inf")
+        self._last_published_s = float("-inf")
+        self._last_payload_fingerprint: str | None = None
         self._last_control_poll_s = float("-inf")
         self._last_control_signature: tuple[int, int, int] | None = None
         self._lock = threading.Lock()
@@ -203,6 +211,19 @@ class RuntimeStateChannel:
             self._last_publish_s = now
             try:
                 fields = dict(fields_factory())
+                payload_fingerprint = json.dumps(
+                    fields,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if (
+                    not force
+                    and payload_fingerprint == self._last_payload_fingerprint
+                    and now - self._last_published_s
+                    < self._unchanged_publish_interval_s
+                    and destination.exists()
+                ):
+                    return False
                 payload = {
                     **fields,
                     "timestamp_s": time.time(),
@@ -242,6 +263,8 @@ class RuntimeStateChannel:
                 )
                 return False
             self._warned_failures.discard("metrics-write")
+            self._last_published_s = now
+            self._last_payload_fingerprint = payload_fingerprint
             return True
         finally:
             self._timing_recorder.record_elapsed_ns(
