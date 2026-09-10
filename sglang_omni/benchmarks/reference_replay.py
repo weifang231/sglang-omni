@@ -24,7 +24,7 @@ from sglang.srt.layers.sampler import (
 )
 from torch import nn
 
-BACKEND_NAME = "omni_reference_replay_v1"
+BACKEND_NAME = "omni_reference_replay_view_candidate_v1"
 _factory_args = ContextVar("reference_replay_factory", default=None)
 _registered = False
 
@@ -60,6 +60,19 @@ def _select_kernel(
 class ReferenceSequence:
     prompt_length: int
     token_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _BoundRows:
+    rows: torch.Tensor
+    frame: torch.Tensor | None
+
+    @property
+    def shape(self):
+        return self.rows.shape
+
+    def tolist(self):
+        return self.rows.tolist()
 
 
 class ReferencePlan:
@@ -112,11 +125,12 @@ class ReferencePlan:
         )
         self._batch_cache_limit = batch_cache_limit
         self._batch_rows = OrderedDict()
+        self.selection_counts = {"view": 0, "fused": 0, "batch_cache_misses": 0}
 
     def bind(self, forward_batch, terminal_resolver=None):
         rids = tuple(forward_batch.rids or ())
         lengths = forward_batch.seq_lens_cpu
-        if not rids or len(set(rids)) != len(rids):
+        if not rids:
             raise ValueError("each batch row needs a unique request ID")
         if not isinstance(lengths, torch.Tensor) or lengths.device.type != "cpu":
             raise ValueError("the existing CPU sequence-length mirror is required")
@@ -124,17 +138,50 @@ class ReferencePlan:
             raise ValueError("request IDs and sequence lengths do not align")
         if lengths.dtype not in {torch.int32, torch.int64}:
             raise ValueError("sequence lengths must be integers")
-        # Read the existing host mirror, never synchronize device positions to CPU.
+        cached = self._batch_rows.get(rids)
+        if cached is None:
+            if len(set(rids)) != len(rids):
+                raise ValueError("each batch row needs a unique request ID")
+            if any(rid not in self._sequences for rid in rids):
+                raise ValueError("unregistered replay request")
+            static = tuple(
+                (
+                    self._sequences[rid].prompt_length,
+                    len(self._sequences[rid].token_ids),
+                )
+                for rid in rids
+            )
+            rows = torch.tensor(
+                [self._row_by_rid[rid] for rid in rids],
+                device=self.device,
+                dtype=torch.int64,
+            )
+            frames = None
+            if rows.is_cuda and len(rids) == len(self._sequences):
+                # Frames are immutable and retain their backing allocation.
+                frames = self._tokens.index_select(0, rows).T.contiguous().unbind(0)
+            cached = rows, static, frames
+            self._batch_rows[rids] = cached
+            self.selection_counts["batch_cache_misses"] += 1
+            if len(self._batch_rows) > self._batch_cache_limit:
+                self._batch_rows.popitem(last=False)
+        rows, static, frames = cached
         discarded = []
-        for rid, length in zip(rids, lengths.tolist()):
-            if rid not in self._sequences:
-                raise ValueError(f"unregistered replay request: {rid}")
-            seq = self._sequences[rid]
-            offset = length - seq.prompt_length
-            if not 0 <= offset < len(seq.token_ids):
+        common = None
+        same_offset = True
+        for index, (length, (prompt_length, reference_length)) in enumerate(
+            zip(lengths.tolist(), static)
+        ):
+            offset = length - prompt_length
+            if index == 0:
+                common = offset
+            elif offset != common:
+                same_offset = False
+            if not 0 <= offset < reference_length:
+                rid = rids[index]
                 proof = (
-                    terminal_resolver(rid, offset, len(seq.token_ids))
-                    if offset == len(seq.token_ids) and terminal_resolver
+                    terminal_resolver(rid, offset, reference_length)
+                    if offset == reference_length and terminal_resolver
                     else None
                 )
                 if not proof:
@@ -142,23 +189,24 @@ class ReferencePlan:
                         f"reference position out of bounds for {rid}: {offset}"
                     )
                 discarded.append((rid, offset, proof))
-        rows = self._batch_rows.get(rids)
-        if rows is None:
-            rows = torch.tensor(
-                [self._row_by_rid[rid] for rid in rids],
-                device=self.device,
-                dtype=torch.int64,
-            )
-            self._batch_rows[rids] = rows
-            if len(self._batch_rows) > self._batch_cache_limit:
-                self._batch_rows.popitem(last=False)
-        return rows, True if discarded else None, discarded
+        frame = (
+            frames[common]
+            if frames is not None and same_offset and not discarded
+            else None
+        )
+        return _BoundRows(rows, frame), True if discarded else None, discarded
 
     def select(self, rows, positions, natural, discarded=None):
+        bound = rows
+        rows = bound.rows
         if positions.ndim != 1 or positions.shape != rows.shape:
             raise ValueError("only one sampled token per request is supported")
         if positions.device != rows.device:
             raise ValueError("positions and reference table must share a device")
+        if bound.frame is not None and bound.frame.dtype == natural.dtype:
+            self.selection_counts["view"] += 1
+            return bound.frame
+        self.selection_counts["fused"] += 1
         if rows.is_cuda:
             selected = torch.empty_like(natural)
             _select_kernel[(1,)](
@@ -415,6 +463,10 @@ def register_benchmark_control():
                 raise ValueError("unknown benchmark arm")
             runtime_identity = _benchmark_runtime_identity()
             runner = scheduler.tp_worker.model_runner
+            if getattr(runner.model_config.hf_config, "model_type", None) != "qwen3":
+                raise ValueError(
+                    "this host-position view candidate is limited to the reviewed dense Qwen3 runner"
+                )
             if not scheduler.spec_algorithm.is_none():
                 raise ValueError(
                     "speculative decoding is outside this replay benchmark"
@@ -447,6 +499,28 @@ def register_benchmark_control():
                     mode="forced" if mode == "replay" else "noop",
                     terminal_resolver=terminal_resolver,
                 )
+            actual_plan_identity = None
+            if installation is not None:
+                import hashlib
+                from pathlib import Path
+
+                actual_plan = runner.sampler.plan
+                if type(actual_plan) is not ReferencePlan:
+                    raise RuntimeError("unexpected actual sampler plan class")
+                actual_plan_identity = {}
+                for name in ("bind", "select"):
+                    method = getattr(actual_plan, name)
+                    if method.__func__ is not getattr(ReferencePlan, name):
+                        raise RuntimeError("unexpected actual sampler plan method")
+                    filename = Path(method.__code__.co_filename).resolve()
+                    actual_plan_identity[name] = {
+                        "code_filename": str(filename),
+                        "qualname": method.__qualname__,
+                        "module": method.__module__,
+                        "source_sha256": hashlib.sha256(
+                            filename.read_bytes()
+                        ).hexdigest(),
+                    }
             torch.cuda.synchronize(runner.gpu_id)
             if receipt_path is not None:
                 import json
@@ -465,8 +539,12 @@ def register_benchmark_control():
                             "sampler_class": type(runner.sampler).__qualname__,
                             "sampler_module": type(runner.sampler).__module__,
                             "runtime_identity": runtime_identity,
+                            "actual_plan_identity": actual_plan_identity,
                             "reference_bound": installation is not None,
                             "previous_discarded_rows": previous_discarded,
+                            "selection_counts": dict(plan.selection_counts)
+                            if mode != "native"
+                            else None,
                         },
                         indent=2,
                     )

@@ -61,14 +61,15 @@ engine.collective_rpc(
 )
 ```
 
-The RPC requires a fully idle scheduler and rejects speculative decoding. An
+The RPC requires a fully idle scheduler, the reviewed dense Qwen3 model, and
+non-speculative decoding. An
 Engine response can arrive before its last overlap result leaves the scheduler,
 so the harness retries only the explicit idle error, for at most 10 seconds,
 outside every timed measurement. Each formal configuration has its own receipt
 and SHA-256 reference in the raw measurement. `mode="native"` removes the adapter.
 
 The idle RPC also records the worker's PID, selected plugin, Python path, thread
-setting, and the actual `ReferencePlan.bind/select` code locations. It rejects
+setting, and the actual installed plan's `bind/select` code locations and source hashes. It rejects
 loaded diagnostic modules or unexpected method files before generation. Use a
 private entry-point directory containing only `reference_replay`; the formal
 launcher hashes that metadata and its source before starting the worker. These
@@ -76,10 +77,19 @@ identity checks do not run in the per-token path.
 
 ## Position and termination behavior
 
-Each forward binds its actual `ForwardBatch.rids` and existing CPU sequence-length
-mirror. Device positions choose the reference offset, so row moves and different
-prompt lengths do not use a shared call counter. CUDA selection uses one Triton
-kernel; the CPU path supports focused binding tests.
+Each forward binds its actual `ForwardBatch.rids` and reads the current CPU
+sequence-length mirror. The reviewed dense runner derives its GPU positions
+from those lengths. When the full reference cohort has a common valid output
+offset, the adapter returns a pre-created immutable GPU frame. Request membership
+and prompt/reference lengths are cached by row ordering; changing sequence
+lengths are not cached. The returned frame retains its backing storage across
+subsequent steps and cache eviction.
+
+Mixed offsets, partial cohorts and discarded boundary samples use the existing
+GPU-position Triton selector. Both paths use actual positions rather than a
+shared call counter. The CPU path supports focused binding tests. Fixed-cohort
+decoder results do not establish latency equivalence for the mixed-position path,
+which still adds a kernel launch and per-step host work.
 
 The final adapter preloads reference lengths while configuring the idle worker.
 After the CPU proves a discarded row, the GPU compares its offset with that
@@ -122,6 +132,9 @@ restoration, thread-local binding and terminal proofs. Explicit GPU checks cover
 the fused gather for batches 1, 8 and 32 with int32/int64 positions and mixed
 discarded rows. The real decoder checks visible token IDs and finish reasons,
 including a stop-token row whose peer continues decoding.
+The frame check also changes positions, reorders rows, and evicts cached mappings
+while retaining an earlier output tensor, then verifies that its contents remain
+unchanged.
 
 These checks cover the tested dense, non-speculative decoder. They do not cover
 DLLM, multimodal rotary-position layouts, arbitrary runner callers, the full Omni

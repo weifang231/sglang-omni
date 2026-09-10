@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 from sglang.srt.layers.sampler import Sampler
+from torch import nn
+
 from sglang_omni.benchmarks.reference_replay import (
     ReferencePlan,
     ReferenceSequence,
@@ -14,7 +16,6 @@ from sglang_omni.benchmarks.reference_replay import (
     _pending_stop_proof,
     install_reference_replay,
 )
-from torch import nn
 
 
 def test_benchmark_identity_records_current_worker(monkeypatch):
@@ -287,3 +288,36 @@ def test_fused_cuda_gather_real_row_moves_and_discard(size, position_dtype):
                 for i in indices
             ]
             assert actual == expected
+
+
+@pytest.mark.skipif(
+    os.environ.get("REFERENCE_REPLAY_GPU_TEST") != "1", reason="task GPU required"
+)
+def test_common_frame_mixed_offsets_and_lifetime():
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") == "2"
+    p = ReferencePlan(
+        {f"r{i}": ReferenceSequence(i + 3, (i + 1, i + 11, i + 21)) for i in range(3)},
+        vocab_size=100,
+        device="cuda:0",
+        batch_cache_limit=1,
+    )
+    runner = Runner()
+    with install_reference_replay(runner, p, mode="forced"):
+
+        def run(rids, offsets):
+            lengths = [int(rid[1:]) + 3 + offset for rid, offset in zip(rids, offsets)]
+            current = batch(rids, lengths)
+            current.positions = current.positions.cuda()
+            return runner.sample(torch.zeros(len(rids), 100, device="cuda:0"), current)
+
+        first = run(["r0", "r1", "r2"], [0, 0, 0])
+        saved = first.clone()
+        second = run(["r0", "r1", "r2"], [1, 1, 1])
+        assert first.data_ptr() != second.data_ptr()
+        assert first.tolist() == [1, 2, 3] and second.tolist() == [11, 12, 13]
+        assert p.selection_counts["view"] == 2
+        assert run(["r0", "r1", "r2"], [0, 1, 2]).tolist() == [1, 12, 23]
+        assert p.selection_counts["fused"] == 1
+        assert run(["r2", "r1", "r0"], [2, 2, 2]).tolist() == [23, 22, 21]
+        assert torch.equal(first, saved)
+        assert len(p._batch_rows) == 1
