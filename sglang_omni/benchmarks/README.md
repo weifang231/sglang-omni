@@ -91,11 +91,9 @@ shared call counter. The CPU path supports focused binding tests. Fixed-cohort
 decoder results do not establish latency equivalence for the mixed-position path,
 which still adds a kernel launch and per-step host work.
 
-The final adapter preloads reference lengths while configuring the idle worker.
+The adapter preloads reference lengths while configuring the idle worker.
 After the CPU proves a discarded row, the GPU compares its offset with that
 preloaded length. It does not construct a host boolean mask at termination.
-The earlier mask construction issued a blocking H2D copy; its retained traces
-and measurements remain part of the experiment evidence.
 
 The first occurrence of an uncached request-ID ordering still allocates a device
 row-index tensor. The fixed-cohort benchmark warms those orderings before timing,
