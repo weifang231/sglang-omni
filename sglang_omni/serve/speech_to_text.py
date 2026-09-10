@@ -41,6 +41,7 @@ from sglang_omni.serve.streaming import (
 from sglang_omni.serve.subtitles import segments_to_srt, segments_to_vtt
 from sglang_omni.serve.transcription_adapters import resolve_adapter
 from sglang_omni.serve.transcription_adapters.base import TranscriptionAdapter
+from sglang_omni.utils.runtime_policy import PolicyAdmissionRejected
 
 logger = logging.getLogger(__name__)
 HTTP_DISCONNECT_POLL_INTERVAL_S = 0.05
@@ -454,6 +455,7 @@ async def _first_speech_to_text_chunk(
 async def speech_to_text_stream(
     chunk_stream: AsyncIterator[GenerateChunk],
     *,
+    client: Client,
     first_chunk: GenerateChunk | None,
     request_id: str,
     adapter: TranscriptionAdapter,
@@ -462,6 +464,7 @@ async def speech_to_text_stream(
 ) -> AsyncIterator[str]:
     """Keep terminal event ordering stable for OpenAI-compatible clients."""
     final_text: str | None = None
+    outcome = "cancelled"
 
     def _event_for(chunk: GenerateChunk) -> str | None:
         nonlocal final_text
@@ -479,12 +482,15 @@ async def speech_to_text_stream(
             if first_chunk is not None:
                 line = _event_for(first_chunk)
                 if line is not None:
+                    client.runtime_frontend_event("text_emit", request_id)
                     yield line
             async for chunk in chunk_stream:
                 line = _event_for(chunk)
                 if line is not None:
+                    client.runtime_frontend_event("text_emit", request_id)
                     yield line
     except Exception as exc:
+        client.runtime_frontend_event("request_terminal", request_id, outcome="failed")
         if QueueFullError.matches(exc):
             logger.warning(
                 "Rejecting %s stream for request %s: %s",
@@ -502,13 +508,23 @@ async def speech_to_text_stream(
         yield f"data: {json.dumps(payload)}\n\n"
         return
 
+    except BaseException:
+        client.runtime_frontend_event("request_terminal", request_id, outcome="cancelled")
+        raise
+
     text = adapter.postprocess_text(final_text or "")
     usage = (
         TranscriptionUsage(seconds=math.ceil(duration_s)) if duration_s > 0 else None
     )
     done_event = TranscriptionTextDoneEvent(text=text, usage=usage)
-    yield f"data: {done_event.model_dump_json(exclude_none=True)}\n\n"
-    yield f"data: {STREAM_DONE_SENTINEL}\n\n"
+    try:
+        if text:
+            client.runtime_frontend_event("text_emit", request_id)
+        yield f"data: {done_event.model_dump_json(exclude_none=True)}\n\n"
+        outcome = "completed"
+        yield f"data: {STREAM_DONE_SENTINEL}\n\n"
+    finally:
+        client.runtime_frontend_event("request_terminal", request_id, outcome=outcome)
 
 
 async def create_speech_to_text_streaming_response(
@@ -531,7 +547,17 @@ async def create_speech_to_text_streaming_response(
         first_chunk = await _first_speech_to_text_chunk(
             request, client, chunk_stream, request_id
         )
+    except PolicyAdmissionRejected as exc:
+        await close_async_iterator_if_supported(chunk_stream)
+        return JSONResponse(status_code=429, content={"error": {
+            "type": "AdmissionRejectedError", "code": 429,
+            "message": str(exc), "metadata": exc.receipt,
+        }})
+    except asyncio.CancelledError:
+        client.runtime_frontend_event("request_terminal", request_id, outcome="cancelled")
+        raise
     except ClientError as exc:
+        client.runtime_frontend_event("request_terminal", request_id, outcome="failed")
         await close_async_iterator_if_supported(chunk_stream)
         if QueueFullError.matches(exc):
             raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
@@ -539,6 +565,7 @@ async def create_speech_to_text_streaming_response(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
+        client.runtime_frontend_event("request_terminal", request_id, outcome="failed")
         await close_async_iterator_if_supported(chunk_stream)
         if QueueFullError.matches(exc):
             raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
@@ -553,6 +580,7 @@ async def create_speech_to_text_streaming_response(
     return ClosableStreamingResponse(
         speech_to_text_stream(
             chunk_stream,
+            client=client,
             first_chunk=first_chunk,
             request_id=request_id,
             adapter=adapter,
@@ -561,4 +589,7 @@ async def create_speech_to_text_streaming_response(
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Request-Id": request_id},
+        on_close=lambda: client.runtime_frontend_event(
+            "request_terminal", request_id, outcome="cancelled"
+        ),
     )

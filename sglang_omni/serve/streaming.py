@@ -19,6 +19,10 @@ STREAM_DONE_SENTINEL = "[DONE]"
 class ClosableStreamingResponse(StreamingResponse):
     """Close the response body iterator at the ASGI ownership boundary."""
 
+    def __init__(self, *args: Any, on_close: Any = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.on_close = on_close
+
     async def __call__(
         self,
         scope: Scope,
@@ -34,6 +38,9 @@ class ClosableStreamingResponse(StreamingResponse):
                 logger.warning("Cancelled while closing streaming response body")
             except Exception:
                 logger.warning("Failed to close streaming response body", exc_info=True)
+            finally:
+                if self.on_close is not None:
+                    self.on_close()
 
 
 async def close_async_iterator_if_supported(stream: AsyncIterator[Any]) -> None:

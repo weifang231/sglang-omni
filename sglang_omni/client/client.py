@@ -88,6 +88,8 @@ class Client:
         request: GenerateRequest,
         request_id: str | None = None,
     ) -> AsyncIterator[GenerateChunk]:
+        if self._coordinator._runtime_policy is not None and not request.stream:
+            raise ValueError("The ASR runtime policy requires streaming transcription")
         req_id = request_id or str(uuid.uuid4())
         omni_request = self._build_omni_request(request)
         if request.stream:
@@ -97,7 +99,9 @@ class Client:
                     if isinstance(msg, StreamMessage):
                         yield self._stream_builder(req_id, msg)
                     else:
-                        yield self._result_builder(req_id, msg.result)
+                        chunk = self._result_builder(req_id, msg.result)
+                        chunk.metadata.update(msg.metadata)
+                        yield chunk
             return
 
         result = await self._coordinator.submit(req_id, omni_request)
@@ -385,6 +389,11 @@ class Client:
     def health(self) -> dict[str, Any]:
         return self._coordinator.health()
 
+    def runtime_frontend_event(self, event: str, request_id: str, **fields: Any) -> None:
+        policy = self._coordinator._runtime_policy
+        if policy is not None:
+            policy.frontend_event(event, request_id, **fields)
+
     async def admin(
         self,
         action: str,
@@ -656,6 +665,7 @@ class Client:
     @staticmethod
     def _default_stream_builder(request_id: str, msg: StreamMessage) -> GenerateChunk:
         chunk = GenerateChunk(request_id=request_id)
+        chunk.metadata.update(msg.metadata)
         chunk.stage_name = msg.stage_name or msg.from_stage
         chunk.stage_id = msg.stage_id
         if msg.modality:
@@ -664,6 +674,7 @@ class Client:
         data = msg.chunk
         if isinstance(data, GenerateChunk):
             data.request_id = request_id
+            data.metadata.update(msg.metadata)
             if data.stage_name is None:
                 data.stage_name = chunk.stage_name
             if data.stage_id is None:

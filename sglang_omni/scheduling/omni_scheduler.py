@@ -413,7 +413,7 @@ class OmniScheduler:
             NewTokenRatioTracker,
         )
 
-        self.new_token_ratio_tracker = NewTokenRatioTracker.from_config()
+        self.new_token_ratio_tracker = NewTokenRatioTracker.from_server_args(server_args)
         self.prefill_delayer = None
         self.lora_drainer = None
 
@@ -793,8 +793,7 @@ class OmniScheduler:
             attn_tp_size=self.attn_tp_size,
             attn_cp_rank=self.attn_cp_rank,
             attn_cp_size=self.attn_cp_size,
-            attn_dcp_rank=self.tp_rank % self.server_args.dcp_size,
-            attn_dcp_size=self.server_args.dcp_size,
+            dcp_size=self.server_args.dcp_size,
             attn_dp_rank=self.attn_dp_rank,
             attn_dp_size=self.attn_dp_size,
             moe_ep_rank=self.moe_ep_rank,

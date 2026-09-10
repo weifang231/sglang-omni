@@ -19,6 +19,7 @@ from sglang_omni.pipeline.replicas import (
     assign_replica_bindings,
 )
 from sglang_omni.profiler.event_recorder import emit as _emit_event
+from sglang_omni.utils.runtime_policy import PolicyAdmissionRejected, create_runtime_policy
 from sglang_omni.proto import (
     AbortMessage,
     AdminMessage,
@@ -181,6 +182,10 @@ class Coordinator:
         # State
         self._running = False
         self._fatal_error: str | None = None
+        self._runtime_policy = create_runtime_policy(
+            role="coordinator", entry_stage=entry_stage,
+            terminal_stages=terminal_stages, queue_control=queue_control,
+        )
 
     def register_stage(self, name: str, endpoint: str) -> None:
         """Register a stage.
@@ -189,6 +194,8 @@ class Coordinator:
             name: Stage name
             endpoint: ZMQ endpoint for the stage
         """
+        if self._runtime_policy is not None and (name != self.entry_stage or self._stages):
+            raise ValueError("ASR runtime policy requires exactly one stage instance")
         self._stages[name] = StageInfo(name=name, control_endpoint=endpoint)
         logger.info("Coordinator registered stage: %s at %s", name, endpoint)
 
@@ -218,6 +225,8 @@ class Coordinator:
                 pass
             self._runtime_control_task = None
         self.control_plane.close()
+        if self._runtime_policy is not None:
+            await asyncio.to_thread(self._runtime_policy.close)
         logger.info("Coordinator stopped")
 
     async def fail_pending_requests(self, error: BaseException | str) -> None:
@@ -521,6 +530,14 @@ class Coordinator:
         if entry_instance not in self._stages:
             raise ValueError(f"Entry stage {entry_instance} not registered")
         entry_info = self._stages[entry_instance]
+
+        if self._runtime_policy is not None:
+            if not self._runtime_policy.admit(request_id, request):
+                decision = self._runtime_policy.receipts[request_id]["decision"]
+                raise PolicyAdmissionRejected(
+                    f"ASR D1 {decision['status']}: {decision['reason']}",
+                    self._runtime_policy.message_metadata(request_id),
+                )
 
         # Track request
         self._requests[request_id] = RequestInfo(
@@ -1047,6 +1064,8 @@ class Coordinator:
         self,
         request_id: str,
     ) -> bool:
+        if self._runtime_policy is not None:
+            self._runtime_policy.aborted(request_id)
         cancellation = None
         queued_only = (
             self._runtime_queue is not None
@@ -1156,6 +1175,10 @@ class Coordinator:
     async def _handle_completion(self, msg: CompleteMessage) -> None:
         """Handle a completion message from a stage."""
         request_id = msg.request_id
+        if self._runtime_policy is not None:
+            self._runtime_policy.completed(request_id)
+            msg = replace(msg, metadata={**msg.metadata,
+                                         **self._runtime_policy.message_metadata(request_id)})
         logger.debug(
             "Coordinator received completion: req=%s from %s success=%s",
             request_id,
@@ -1258,6 +1281,9 @@ class Coordinator:
     async def _handle_stream(self, msg: StreamMessage) -> None:
         """Handle a stream chunk from a stage."""
         request_id = msg.request_id
+        if self._runtime_policy is not None:
+            msg = replace(msg, metadata={**msg.metadata,
+                                         **self._runtime_policy.message_metadata(request_id)})
         if request_id not in self._stream_queues:
             return
         _emit_event(
@@ -1414,4 +1440,6 @@ class Coordinator:
         }
         if self._runtime_queue is not None:
             health["queue_control"] = self._runtime_queue.snapshot()
+        if self._runtime_policy is not None:
+            health["runtime_policy"] = self._runtime_policy.snapshot()
         return health

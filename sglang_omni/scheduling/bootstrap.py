@@ -112,7 +112,15 @@ def create_sglang_infrastructure(
     from sglang_omni.model_runner.model_worker import ModelWorker, ModelWorkerConfig
     from sglang_omni.scheduling.sglang_backend import create_tree_cache
 
-    if get_context().is_config_namespace_published("model"):
+    try:
+        get_context().config_bag("model")
+    except ValueError as exc:
+        if str(exc) != "config namespace 'model' not published":
+            raise
+        model_config_published = False
+    else:
+        model_config_published = True
+    if model_config_published:
         raise RuntimeError(
             "this process already holds a published SGLang runtime context; "
             "an SGLang AR engine must own its OS process. Place SGLang AR "

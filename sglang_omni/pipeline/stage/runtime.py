@@ -56,6 +56,7 @@ from sglang_omni.relay.base import Relay
 from sglang_omni.runtime_queue import RuntimeCreditQueue, RuntimeQueueItem
 from sglang_omni.scheduling.messages import IncomingMessage
 from sglang_omni.utils.runtime_state import RuntimeStateChannel
+from sglang_omni.utils.runtime_policy import create_runtime_policy
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,11 @@ class Stage:
         self._tp_fanout = tp_fanout
         self._is_terminal = is_terminal
         self._owns_external_io = role in {"single", "leader"}
+        self._runtime_policy = create_runtime_policy(
+            role="stage", name=name, tp_size=tp_size, terminal=is_terminal,
+            stream_receiver=can_accept_stream_before_payload,
+            stream_targets=stream_targets, queue_control=queue_control,
+        )
         self._runtime_queue: RuntimeCreditQueue[Any] | None = (
             RuntimeCreditQueue.from_config(queue_control)
             if queue_control is not None and self._owns_external_io
@@ -358,6 +364,8 @@ class Stage:
         except Exception as exc:
             _record_cleanup_error("comm", exc)
         logger.info("Stage %s stopped", self.name)
+        if self._runtime_policy is not None:
+            await asyncio.to_thread(self._runtime_policy.close)
         if cleanup_error is not None:
             raise RuntimeError(f"Stage {self.name} cleanup failed") from cleanup_error
 
@@ -1047,6 +1055,8 @@ class Stage:
 
     def _dispatch_payload(self, payload: Any) -> None:
         request_id = payload.request_id
+        if self._runtime_policy is not None:
+            self._runtime_policy.acquired(request_id, payload.request.metadata)
         _emit_event(
             request_id=request_id,
             stage=self.name,
@@ -1366,6 +1376,14 @@ class Stage:
         try:
             action = operation.action
             payload = dict(operation.payload)
+            if action == "runtime_policy_snapshot":
+                if self._runtime_policy is None:
+                    return self._admin_result(operation, success=False,
+                                              error="Runtime policy is not installed")
+                if payload:
+                    raise ValueError("Runtime policy snapshot accepts no mutations")
+                return self._admin_result(operation, success=True,
+                                          data=self._runtime_policy.snapshot())
             if action == "update_queue_control":
                 if self._runtime_queue is None:
                     return self._admin_result(
@@ -1512,6 +1530,11 @@ class Stage:
                 continue
 
             for batch_index in range(_OUTBOX_DRAIN_BATCH_SIZE):
+                if (self._runtime_policy is not None and out.type in {"result", "error"}
+                        and out.request_id in self._runtime_policy.active):
+                    self._runtime_policy.released(
+                        out.request_id, "completed" if out.type == "result" else "rollback"
+                    )
                 if out.request_id in self._active_requests:
                     if out.type == "result":
                         self._release_runtime_credit(out.request_id, status="completed")
@@ -2214,6 +2237,8 @@ class Stage:
             ids -= set(to_remove)
 
     def _on_abort(self, request_id: str) -> None:
+        if self._runtime_policy is not None:
+            self._runtime_policy.aborted(request_id)
         if self._runtime_queue is None:
             self._record_aborted_request_id(request_id)
             self._comm.cleanup(request_id)

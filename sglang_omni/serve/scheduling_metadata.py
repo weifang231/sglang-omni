@@ -18,6 +18,8 @@ from sglang_omni.runtime_queue import (
 
 REQUEST_CLASS_HEADER = "x-sglang-omni-request-class"
 FIRST_OUTPUT_DEADLINE_MS_HEADER = "x-sglang-omni-first-output-deadline-ms"
+FIRST_OUTPUT_DEADLINE_MONOTONIC_HEADER = "x-sglang-omni-first-output-deadline-monotonic-s"
+FIRST_OUTPUT_DEADLINE_MONOTONIC_KEY = "sglang_omni.first_output_deadline_monotonic_s"
 ADMISSION_CORRELATION_ID_HEADER = "x-sglang-omni-admission-correlation-id"
 PLAYBACK_BUFFER_MS_HEADER = "x-sglang-omni-playback-buffer-ms"
 TRUST_SCHEDULING_HEADERS_ENV = "SGLANG_OMNI_TRUST_SCHEDULING_HEADERS"
@@ -66,6 +68,14 @@ def scheduling_metadata_from_headers(
         return {}
     normalized_headers = {str(key).lower(): value for key, value in headers.items()}
     metadata: dict[str, Any] = {}
+    if (FIRST_OUTPUT_DEADLINE_MS_HEADER in normalized_headers
+            and FIRST_OUTPUT_DEADLINE_MONOTONIC_HEADER in normalized_headers):
+        raise ValueError("Relative and absolute deadlines are mutually exclusive")
+    if FIRST_OUTPUT_DEADLINE_MONOTONIC_HEADER in normalized_headers:
+        metadata[FIRST_OUTPUT_DEADLINE_MONOTONIC_KEY] = _non_negative_header_float(
+            normalized_headers[FIRST_OUTPUT_DEADLINE_MONOTONIC_HEADER],
+            field_name=FIRST_OUTPUT_DEADLINE_MONOTONIC_HEADER,
+        )
     if REQUEST_CLASS_HEADER in normalized_headers:
         metadata[REQUEST_CLASS_METADATA_KEY] = _label_header(
             normalized_headers[REQUEST_CLASS_HEADER],

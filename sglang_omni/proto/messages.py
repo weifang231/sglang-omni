@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Control plane messages."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import msgspec
@@ -181,6 +181,7 @@ class CompleteMessage:
     success: bool
     result: Any = None
     error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,6 +191,7 @@ class CompleteMessage:
             "success": self.success,
             "result": self.result,
             "error": self.error,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -200,6 +202,7 @@ class CompleteMessage:
             success=d["success"],
             result=d.get("result"),
             error=d.get("error"),
+            metadata=d.get("metadata", {}),
         )
 
 
@@ -214,6 +217,7 @@ class StreamMessage:
     stage_name: str | None = None
     modality: str | None = None
     chunk_id: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -224,6 +228,7 @@ class StreamMessage:
             "stage_id": self.stage_id,
             "stage_name": self.stage_name,
             "modality": self.modality,
+            "metadata": self.metadata,
         }
         if self.chunk_id is not None:
             d["chunk_id"] = self.chunk_id
@@ -239,6 +244,7 @@ class StreamMessage:
             stage_name=d.get("stage_name"),
             modality=d.get("modality"),
             chunk_id=d.get("chunk_id"),
+            metadata=d.get("metadata", {}),
         )
 
 

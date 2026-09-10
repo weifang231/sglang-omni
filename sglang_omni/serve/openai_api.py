@@ -445,6 +445,18 @@ def _register_models(app: FastAPI) -> None:
 def _register_admin(app: FastAPI, admin_api_key: str | None = None) -> None:
     _auth = make_admin_auth_dependency(admin_api_key)
 
+    @app.post("/runtime_policy_snapshot", dependencies=[Depends(_auth)])
+    async def runtime_policy_snapshot(req: AdminRequestBase) -> JSONResponse:
+        client: Client = app.state.client
+        stages = await client.admin(
+            "runtime_policy_snapshot", stages=req.stages,
+            timeout_s=_timeout_or_default(req.timeout_s, 30.0),
+        )
+        coordinator = client.health().get("runtime_policy")
+        if coordinator is None:
+            raise HTTPException(status_code=409, detail="Runtime policy is not installed")
+        return JSONResponse({"coordinator": coordinator, "stages": stages})
+
     @app.get("/model_info", dependencies=[Depends(_auth)])
     async def model_info_get() -> JSONResponse:
         client: Client = app.state.client
