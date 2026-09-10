@@ -89,7 +89,7 @@ class Client:
         request_id: str | None = None,
     ) -> AsyncIterator[GenerateChunk]:
         if self._coordinator._runtime_policy is not None and not request.stream:
-            raise ValueError("The ASR runtime policy requires streaming transcription")
+            raise ValueError("The runtime policy requires the declared streaming endpoint")
         req_id = request_id or str(uuid.uuid4())
         omni_request = self._build_omni_request(request)
         if request.stream:
@@ -393,6 +393,10 @@ class Client:
         policy = self._coordinator._runtime_policy
         if policy is not None:
             policy.frontend_event(event, request_id, **fields)
+
+    @property
+    def runtime_policy(self):
+        return self._coordinator._runtime_policy
 
     async def admin(
         self,

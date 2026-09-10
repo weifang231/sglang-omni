@@ -122,6 +122,7 @@ from sglang_omni.serve.scheduling_metadata import (
     scheduling_metadata_from_headers as _scheduling_metadata_from_headers,
 )
 from sglang_omni.serve.speech_service import SpeechRequestValidator
+from sglang_omni.utils.runtime_policy import PolicyAdmissionRejected
 from sglang_omni.serve.speech_voices import SpeakerSampleStore
 from sglang_omni.serve.speech_ws import SpeechWebSocketSession
 from sglang_omni.serve.streaming import STREAM_DONE_SENTINEL
@@ -1306,6 +1307,10 @@ def _register_speech(app: FastAPI) -> None:
                     request_id=request_id,
                     speed=req.speed,
                 )
+            except PolicyAdmissionRejected as exc:
+                return JSONResponse(status_code=429, content={"error": {
+                    "type": "AdmissionRejectedError", "code": 429,
+                    "message": str(exc), "metadata": exc.receipt}})
             except ClientError as exc:
                 return _speech_generation_failure_response(request_id, exc)
             except Exception as exc:
@@ -1486,122 +1491,145 @@ async def _speech_audio_response(
     request_id: str,
     speed: float,
 ) -> StreamingResponse:
-    """Build a raw PCM stream after deriving headers from the first audio chunk."""
+    """Retain whole PCM chunks until the declared first-playback boundary."""
+    policy = client.runtime_policy
+    if policy is not None and (policy.kind != "tts" or speed != 1.0):
+        raise ValueError("Runtime TTS policy requires its mono PCM endpoint at speed=1")
     emitted_samples = 0
     chunk_stream = client.generate(gen_req, request_id=request_id)
-    initial_audio_bytes: list[bytes] = []
+    initial_chunks: list[tuple[bytes, dict[str, Any]]] = []
     initial_audio_samples = 0
     stream_sample_rate: int | None = None
     stream_completed = False
     stream_closed = False
+    terminal_recorded = False
     playback_buffer_ms = _playback_buffer_ms_from_metadata(gen_req.metadata)
     disconnect_task = asyncio.create_task(_wait_for_request_disconnect(request))
     next_chunk_task: asyncio.Task[Any] | None = None
 
+    def pcm_chunk(chunk):
+        nonlocal emitted_samples, stream_sample_rate
+        if chunk.audio_data is None:
+            return None
+        if policy is not None and (type(chunk.sample_rate) is not int or chunk.sample_rate <= 0):
+            raise ValueError("Policy PCM chunks require an explicit positive sample rate")
+        data, emitted_samples, sample_rate = _speech_pcm_chunk_bytes(
+            chunk, emitted_samples=emitted_samples, speed=speed,
+        )
+        if data is None:
+            return None
+        if stream_sample_rate is None:
+            stream_sample_rate = sample_rate
+        elif sample_rate != stream_sample_rate:
+            raise RuntimeError("Raw PCM speech stream sample rate changed")
+        return data, chunk.metadata
+
+    async def close_stream(outcome):
+        nonlocal stream_closed, terminal_recorded
+        if stream_closed:
+            return
+        stream_closed = True
+        try:
+            if next_chunk_task is not None and not next_chunk_task.done():
+                await _cancel_task_bounded(next_chunk_task)
+            if outcome == "completed":
+                await _close_async_iterator_if_supported(chunk_stream)
+            else:
+                await _abort_and_close_speech_stream(client, request_id, chunk_stream)
+        finally:
+            if not terminal_recorded:
+                client.runtime_frontend_event("request_terminal", request_id, outcome=outcome)
+                terminal_recorded = True
+
     try:
         while True:
-            next_chunk_task = asyncio.create_task(anext(chunk_stream))
+            if next_chunk_task is None:
+                next_chunk_task = asyncio.create_task(anext(chunk_stream))
+            deadline = policy.audio_deadline(request_id) if policy is not None and initial_chunks else None
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
             done, _ = await asyncio.wait(
-                {next_chunk_task, disconnect_task},
+                {next_chunk_task, disconnect_task}, timeout=timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if disconnect_task in done:
-                if not next_chunk_task.done():
-                    await _cancel_task_bounded(next_chunk_task)
-                await _abort_and_close_speech_stream(client, request_id, chunk_stream)
-                stream_closed = True
                 raise asyncio.CancelledError
-
+            if not done:
+                decision = policy.audio_release(request_id, initial_audio_samples / stream_sample_rate)
+                if not decision.release:
+                    raise RuntimeError("D3 deadline wakeup did not release its buffered prefix")
+                break
+            task, next_chunk_task = next_chunk_task, None
             try:
-                chunk = next_chunk_task.result()
+                chunk = task.result()
             except StopAsyncIteration:
                 stream_completed = True
+                if policy is not None and initial_chunks:
+                    policy.audio_release(request_id, initial_audio_samples / stream_sample_rate, stream_ended=True)
                 break
-            if chunk.audio_data is None:
+            converted = pcm_chunk(chunk)
+            if converted is None:
                 continue
-
-            audio_bytes, emitted_samples, sample_rate = _speech_pcm_chunk_bytes(
-                chunk,
-                emitted_samples=emitted_samples,
-                speed=speed,
-            )
-            if audio_bytes is None:
-                continue
-            if stream_sample_rate is None:
-                stream_sample_rate = sample_rate
-            elif sample_rate != stream_sample_rate:
-                raise RuntimeError(
-                    "Raw PCM speech stream sample rate changed from "
-                    f"{stream_sample_rate} to {sample_rate}"
-                )
-            initial_audio_bytes.append(audio_bytes)
-            initial_audio_samples += len(audio_bytes) // 2
-            target_samples = math.ceil(playback_buffer_ms * stream_sample_rate / 1000.0)
-            if (
-                playback_buffer_ms <= 0.0
-                or initial_audio_samples >= target_samples
-                or chunk.finish_reason is not None
-                or _first_output_deadline_reached(gen_req.metadata)
-            ):
-                break
-
-        if not initial_audio_bytes or stream_sample_rate is None:
-            raise RuntimeError("No audio output generated from the pipeline.")
-    except asyncio.CancelledError:
-        if not stream_closed:
-            await _abort_and_close_speech_stream(client, request_id, chunk_stream)
+            data, metadata = converted
+            initial_chunks.append((data, metadata))
+            initial_audio_samples += len(data) // 2
+            if policy is not None:
+                if policy.audio_release(request_id, initial_audio_samples / stream_sample_rate,
+                                        stream_ended=chunk.finish_reason is not None).release:
+                    break
+            else:
+                target_samples = math.ceil(playback_buffer_ms * stream_sample_rate / 1000.0)
+                if (playback_buffer_ms <= 0.0 or initial_audio_samples >= target_samples
+                        or chunk.finish_reason is not None or _first_output_deadline_reached(gen_req.metadata)):
+                    break
+        if not initial_chunks or stream_sample_rate is None:
+            raise RuntimeError("No audio output generated from the pipeline")
+    except (asyncio.CancelledError, GeneratorExit):
+        await close_stream("cancelled")
         raise
-    except Exception:
-        if not stream_completed:
-            await _abort_and_close_speech_stream(client, request_id, chunk_stream)
-        else:
-            await _close_async_iterator_if_supported(chunk_stream)
+    except BaseException:
+        await close_stream("failed")
         raise
     finally:
-        if next_chunk_task is not None and not next_chunk_task.done():
-            await _cancel_task_bounded(next_chunk_task)
         if not disconnect_task.done():
             await _cancel_task_bounded(disconnect_task)
 
-    async def _body():
-        nonlocal emitted_samples
-        active_request = True
+    async def body():
+        nonlocal next_chunk_task, stream_completed
+        outcome = "cancelled"
         try:
-            for audio_bytes in initial_audio_bytes:
-                yield audio_bytes
-
-            async for chunk in chunk_stream:
-                if chunk.audio_data is None:
-                    continue
-
-                audio_bytes, emitted_samples, sample_rate = _speech_pcm_chunk_bytes(
-                    chunk,
-                    emitted_samples=emitted_samples,
-                    speed=speed,
-                )
-                if audio_bytes is None:
-                    continue
-                if sample_rate != stream_sample_rate:
-                    raise RuntimeError(
-                        "Raw PCM speech stream sample rate changed from "
-                        f"{stream_sample_rate} to {sample_rate}"
-                    )
-                yield audio_bytes
-            active_request = False
+            for data, metadata in initial_chunks:
+                if policy is not None:
+                    policy.audio_emitting(request_id, metadata, data, stream_sample_rate)
+                yield data
+            while not stream_completed:
+                try:
+                    if next_chunk_task is not None:
+                        task, next_chunk_task = next_chunk_task, None
+                        chunk = await task
+                    else:
+                        chunk = await anext(chunk_stream)
+                except StopAsyncIteration:
+                    stream_completed = True
+                    break
+                converted = pcm_chunk(chunk)
+                if converted is not None:
+                    data, metadata = converted
+                    if policy is not None:
+                        policy.audio_emitting(request_id, metadata, data, stream_sample_rate)
+                    yield data
+            outcome = "completed"
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except BaseException:
+            outcome = "failed"
+            raise
         finally:
-            if active_request:
-                await _abort_and_close_speech_stream(client, request_id, chunk_stream)
-            else:
-                await _close_async_iterator_if_supported(chunk_stream)
+            await close_stream(outcome)
 
-    return StreamingResponse(
-        _body(),
-        media_type="audio/pcm",
-        headers={
-            "X-Sample-Rate": str(stream_sample_rate),
-            "X-Channels": "1",
-            "X-Bit-Depth": "16",
-        },
+    return _ClosableStreamingResponse(
+        body(), media_type="audio/pcm",
+        headers={"X-Sample-Rate": str(stream_sample_rate), "X-Channels": "1", "X-Bit-Depth": "16"},
+        on_close=lambda: close_stream("cancelled"),
     )
 
 

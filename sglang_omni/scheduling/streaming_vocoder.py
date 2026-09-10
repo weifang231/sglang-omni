@@ -117,6 +117,7 @@ class StreamingVocoderBase(
         self._emitted_stream_ids: set[str] = set()
         self._completed_stream_request_ids: dict[str, None] = {}
         self._sample_rate = int(sample_rate)
+        self._audio_ready_observer = None
         self._stream_source_hint = stream_source_hint or type(self).__name__
         self._stream_input_modality = str(stream_input_modality)
         super().__init__(
@@ -347,12 +348,21 @@ class StreamingVocoderBase(
     def _stream_chunk_message(
         self, request_id: str, waveform: torch.Tensor
     ) -> OutgoingMessage:
+        data = self.stream_payload(request_id, waveform)
+        metadata = {"modality": "audio"}
+        if self._audio_ready_observer is not None:
+            metadata.update(self._audio_ready_observer(request_id, data))
         return OutgoingMessage(
             request_id=request_id,
             type="stream",
-            data=self.stream_payload(request_id, waveform),
-            metadata={"modality": "audio"},
+            data=data,
+            metadata=metadata,
         )
+
+    def set_audio_ready_observer(self, observer) -> None:
+        if self._audio_ready_observer is not None or not callable(observer):
+            raise ValueError("A waveform observer must be installed once before scheduler start")
+        self._audio_ready_observer = observer
 
     def _pump_streams(self) -> list[str]:
         """Coalesced decode loop: the hooks pick the participants of one shared

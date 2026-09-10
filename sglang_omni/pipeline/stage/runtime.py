@@ -146,6 +146,11 @@ class Stage:
             stream_receiver=can_accept_stream_before_payload,
             stream_targets=stream_targets, queue_control=queue_control,
         )
+        if self._runtime_policy is not None and self._runtime_policy.kind == "tts" and is_terminal:
+            observer = getattr(scheduler, "set_audio_ready_observer", None)
+            if not callable(observer):
+                raise ValueError("TTS terminal scheduler must expose whole-waveform ready events")
+            observer(self._runtime_policy.audio_ready)
         self._runtime_queue: RuntimeCreditQueue[Any] | None = (
             RuntimeCreditQueue.from_config(queue_control)
             if queue_control is not None and self._owns_external_io
@@ -1015,6 +1020,10 @@ class Stage:
         return True
 
     def _route_stream_item(self, request_id: str, item: StreamItem) -> None:
+        if self._runtime_policy is not None:
+            if [item.from_stage, self.name] not in self._runtime_policy.topology["stream_edges"]:
+                raise ValueError("Stream work arrived over an undeclared policy edge")
+            self._runtime_policy.acquired(request_id, item.metadata or {}, streaming=True)
         message = IncomingMessage(request_id=request_id, type="stream_chunk", data=item)
         self.scheduler.inbox.put(message)
 
@@ -1636,6 +1645,11 @@ class Stage:
             )
 
         next_stages = self.get_next(request_id, result)
+        if self._runtime_policy is not None:
+            expected = [b for a, b in self._runtime_policy.topology["payload_edges"] if a == self.name]
+            actual = [] if next_stages is None else [next_stages] if isinstance(next_stages, str) else next_stages
+            if actual != expected:
+                raise ValueError("Actual payload routing differs from the declared policy topology")
         if next_stages is None:
             # Terminal: notify coordinator
             _emit_event(
@@ -1670,6 +1684,11 @@ class Stage:
                     allow_local_object=is_single_target,
                     allow_projected_local_object=not is_single_target,
                     stream_targets_for_request=stream_targets_for_request,
+                )
+            if self._runtime_policy is not None:
+                await self.control_plane.send_complete(
+                    CompleteMessage(request_id=request_id, from_stage=self.name, success=True,
+                                    metadata={"runtime_policy_stage_complete": True})
                 )
 
         self._clear_request_state(request_id)
@@ -1905,6 +1924,8 @@ class Stage:
         key = (request_id, target)
         chunk_id = self._stream_chunk_counters.get(key, 0)
         self._stream_chunk_counters[key] = chunk_id + 1
+        if self._runtime_policy is not None and chunk_id == 0:
+            metadata = {**(metadata or {}), **self._runtime_policy.message_metadata(request_id)}
         chunk_modality = (
             metadata.get("modality") if isinstance(metadata, dict) else None
         )
@@ -2125,6 +2146,7 @@ class Stage:
             stage_name=self.name,
             modality=modality,
             chunk_id=chunk_id,
+            metadata=dict(metadata or {}),
         )
         if request_id not in self._first_stream_chunk_seen:
             self._first_stream_chunk_seen.add(request_id)

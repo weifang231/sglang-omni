@@ -194,8 +194,8 @@ class Coordinator:
             name: Stage name
             endpoint: ZMQ endpoint for the stage
         """
-        if self._runtime_policy is not None and (name != self.entry_stage or self._stages):
-            raise ValueError("ASR runtime policy requires exactly one stage instance")
+        if self._runtime_policy is not None:
+            self._runtime_policy.register_stage(name, self._stages)
         self._stages[name] = StageInfo(name=name, control_endpoint=endpoint)
         logger.info("Coordinator registered stage: %s at %s", name, endpoint)
 
@@ -532,10 +532,11 @@ class Coordinator:
         entry_info = self._stages[entry_instance]
 
         if self._runtime_policy is not None:
+            self._runtime_policy.validate_stages(self._stages)
             if not self._runtime_policy.admit(request_id, request):
                 decision = self._runtime_policy.receipts[request_id]["decision"]
                 raise PolicyAdmissionRejected(
-                    f"ASR D1 {decision['status']}: {decision['reason']}",
+                    f"D1 {decision['status']}: {decision['reason']}",
                     self._runtime_policy.message_metadata(request_id),
                 )
 
@@ -1176,7 +1177,7 @@ class Coordinator:
         """Handle a completion message from a stage."""
         request_id = msg.request_id
         if self._runtime_policy is not None:
-            self._runtime_policy.completed(request_id)
+            self._runtime_policy.completed(request_id, msg.from_stage)
             msg = replace(msg, metadata={**msg.metadata,
                                          **self._runtime_policy.message_metadata(request_id)})
         logger.debug(
@@ -1185,10 +1186,15 @@ class Coordinator:
             msg.from_stage,
             msg.success,
         )
+        event_name = "terminal_response"
+        if (self._runtime_policy is not None and msg.success
+                and self._replica_topology.logical_name(msg.from_stage)
+                not in self._expected_terminal_stages(request_id)):
+            event_name = "intermediate_stage_completion"
         _emit_event(
             request_id=request_id,
             stage="coordinator",
-            event_name="terminal_response",
+            event_name=event_name,
             metadata={
                 "from_stage": msg.from_stage,
                 "success": msg.success,
@@ -1283,7 +1289,7 @@ class Coordinator:
         request_id = msg.request_id
         if self._runtime_policy is not None:
             msg = replace(msg, metadata={**msg.metadata,
-                                         **self._runtime_policy.message_metadata(request_id)})
+                                         **self._runtime_policy.stream_metadata(request_id)})
         if request_id not in self._stream_queues:
             return
         _emit_event(

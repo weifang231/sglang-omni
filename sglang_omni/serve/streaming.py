@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import inspect
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -40,7 +41,9 @@ class ClosableStreamingResponse(StreamingResponse):
                 logger.warning("Failed to close streaming response body", exc_info=True)
             finally:
                 if self.on_close is not None:
-                    self.on_close()
+                    result = self.on_close()
+                    if inspect.isawaitable(result):
+                        await result
 
 
 async def close_async_iterator_if_supported(stream: AsyncIterator[Any]) -> None:
