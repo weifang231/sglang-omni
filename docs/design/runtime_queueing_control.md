@@ -1,29 +1,19 @@
 # Runtime Queueing Control
 
-## Development baseline
-
-- Feature branch: `feature/runtime-queueing-control`
-- User fork remote: `origin https://github.com/weifang231/sglang-omni.git`
-- User fork base: `eb72964c62dc38d6e98eb0a1cba5da5772dd7a10`
-- Read-only official remote: `upstream https://github.com/sgl-project/sglang-omni.git`
-- Implementation base: `1e6646be4ea0abfee5ddfb5044fcf9525dc98768`
-- Upstream push URL: `DISABLED`
-
-The feature branch was fast-forwarded from the user-fork base to the official
-upstream commit above before implementation. No commits from this branch have
-been pushed.
+Working requirements are maintained in
+[Project Requirements and Audit](../../../experiments/workload/REQUIREMENTS.md).
+This document describes runtime APIs; experiment settings belong to the run configuration.
 
 ## Control contract
 
-The primary mechanism is the coordinator-level, end-to-end class credit used by
-the paper's `c_i` decision. A request is accepted into the coordinator queue,
+The primary mechanism is coordinator-level, end-to-end class credit.
+A request is accepted into the coordinator queue,
 acquires one credit immediately before dispatch to the entry stage, and releases
 that credit exactly once when the full request completes, fails, or is aborted.
 Credit decreases are non-preemptive. The optional per-stage gate is an extension
 for mechanism studies and is disabled unless a stage explicitly configures it.
 It is rejected on stream-receiver stages because payload-only admission cannot
-bound work triggered by side-channel chunks, and it must not be described as the
-paper's end-to-end `c_i` controller.
+bound work triggered by side-channel chunks.
 
 Both gates support stable FIFO or non-preemptive EDF ordering. EDF reads an
 absolute Unix timestamp from request metadata; requests without a deadline sort
@@ -79,8 +69,8 @@ which `max_in_flight` bounds all coordinator-owned requests.
 
 Queue snapshots expose the configured discipline and limits plus active/waiting
 request counts globally and by class. Event traces record queue entry, credit
-acquisition (including queue wait), release, and cancellation. The previously
-validated scheduler, code2wav, and TTS vocoder JSON channels remain opt-in via
+acquisition (including queue wait), release, and cancellation. The scheduler,
+code2wav, and TTS vocoder JSON channels remain opt-in via
 `OMNI_RUNTIME_METRICS_DIR` and `OMNI_RUNTIME_CONTROL_FILE`.
 
 EDF controls admission order only. It does not preempt active requests or replace
@@ -90,7 +80,7 @@ implementation. In a multi-worker router deployment the coordinator credit pool
 is per worker rather than a globally shared cross-worker pool.
 
 An active abort releases the coordinator's logical credit after the abort
-broadcast is accepted by the transport. The current protocol has no per-stage
+broadcast is accepted by the transport. The abort path has no per-stage
 termination acknowledgement, so residual device work can briefly overlap a
 successor after cancellation. Strict physical-WIP accounting across aborts
 requires an acknowledgement protocol and is not provided by this revision.
