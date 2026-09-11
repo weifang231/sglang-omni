@@ -533,7 +533,7 @@ class Coordinator:
 
         if self._runtime_policy is not None:
             self._runtime_policy.validate_stages(self._stages)
-            if not self._runtime_policy.admit(request_id, request):
+            if not self._runtime_policy.admit(request_id, request, replica_bindings=replica_bindings):
                 decision = self._runtime_policy.receipts[request_id]["decision"]
                 raise PolicyAdmissionRejected(
                     f"D1 {decision['status']}: {decision['reason']}",
