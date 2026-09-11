@@ -16,7 +16,7 @@ from sglang_omni.models.ming_omni.components.common import (
 )
 from sglang_omni.models.ming_omni.io import MingOmniPipelineState, PromptInputs
 from sglang_omni.models.ming_omni.pipeline.next_stage import AUDIO_STAGE, IMAGE_STAGE
-from sglang_omni.preprocessing.audio import compute_audio_cache_key, load_audio_path
+from sglang_omni.preprocessing.audio import compute_audio_cache_key
 from sglang_omni.preprocessing.image import (
     compute_image_cache_key,
     ensure_image_list_async,
@@ -26,6 +26,7 @@ from sglang_omni.preprocessing.video import (
     ensure_video_list_async,
 )
 from sglang_omni.proto import StagePayload
+from sglang_omni.utils.audio import load_audio
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +370,8 @@ class MingPreprocessor:
         if top_level_videos:
             messages = _inject_top_level_videos(messages, top_level_videos)
 
-        # --- Extract image / video URLs/data from messages ---
+        # Extract media after normalizing top-level inputs into messages.
+        audio_urls = []
         raw_images: list[Any] = []
         raw_videos: list[Any] = []
         for msg in messages:
@@ -378,7 +380,24 @@ class MingPreprocessor:
                 for item in content:
                     if isinstance(item, dict):
                         item_type = item.get("type", "")
-                        if item_type == "image_url":
+                        if item_type == "audio_url":
+                            audio = item.get("audio_url", {})
+                            url = audio.get("url") if isinstance(audio, dict) else audio
+                            if not isinstance(url, str) or not url:
+                                raise ValueError("An audio_url item requires a nonempty URL")
+                            audio_urls.append(url)
+                        elif item_type == "input_audio":
+                            audio = item.get("input_audio", {})
+                            if (not isinstance(audio, dict)
+                                    or not isinstance(audio.get("data"), str)
+                                    or not audio["data"]
+                                    or not isinstance(audio.get("format"), str)
+                                    or not audio["format"]):
+                                raise ValueError("An input_audio item requires data and format")
+                            audio_urls.append(
+                                f"data:audio/{audio['format']};base64,{audio['data']}"
+                            )
+                        elif item_type == "image_url":
                             url_data = item.get("image_url", {})
                             url = (
                                 url_data.get("url", "")
@@ -456,7 +475,10 @@ class MingPreprocessor:
         )
         audio_coros = (
             [
-                asyncio.to_thread(load_audio_path, url, target_sr=WHISPER_SAMPLE_RATE)
+                asyncio.to_thread(
+                    load_audio, url, target_sample_rate=WHISPER_SAMPLE_RATE,
+                    source_name="Ming-Omni",
+                )
                 for url in audio_urls
             ]
             if audio_urls
@@ -472,7 +494,7 @@ class MingPreprocessor:
         all_tasks.extend(audio_coros)
 
         if all_tasks:
-            results = await asyncio.gather(*all_tasks, return_exceptions=True)
+            results = await asyncio.gather(*all_tasks)
         else:
             results = []
 
@@ -481,25 +503,20 @@ class MingPreprocessor:
         videos: list[Any] = []
         idx = 0
         if image_coro is not None:
-            img_result = results[idx]
+            images = results[idx]
             idx += 1
-            if isinstance(img_result, list):
-                images = img_result
-            elif isinstance(img_result, BaseException):
-                logger.error("Failed to load images: %s", img_result)
         if video_coro is not None:
             vid_result = results[idx]
             idx += 1
-            if isinstance(vid_result, BaseException):
-                logger.error("Failed to load videos: %s", vid_result)
-            else:
-                # ensure_video_list_async returns (videos, sample_fps, audio)
-                videos = vid_result[0] if isinstance(vid_result, tuple) else vid_result
+            # ensure_video_list_async returns (videos, sample_fps, audio).
+            videos = vid_result[0] if isinstance(vid_result, tuple) else vid_result
         audio_results = results[idx:]
 
-        waveforms: list[np.ndarray] = [
-            a for a in audio_results if isinstance(a, np.ndarray)
-        ]
+        if len(images) != len(raw_images) or len(videos) != len(raw_videos):
+            raise ValueError("Loaded media count differs from the request")
+        if any(not isinstance(audio, np.ndarray) for audio in audio_results):
+            raise TypeError("Audio decoding did not return a waveform")
+        waveforms: list[np.ndarray] = audio_results
 
         # --- Process images ---
         image_token_counts: list[int] = []

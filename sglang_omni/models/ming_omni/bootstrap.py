@@ -350,9 +350,15 @@ def make_thinker_stream_output_builder(
     """
     import torch
 
+    from sglang_omni.models.ming_omni.components.talker_executor import (
+        MingTalkerExecutor,
+    )
     from sglang_omni.scheduling.messages import OutgoingMessage
 
     def _build_stream_output(request_id, req_data, req_output):
+        payload = getattr(req_data, "stage_payload", None)
+        if payload is None or not MingTalkerExecutor.should_generate_audio(payload):
+            return []
         req = getattr(req_data, "req", None)
         # Suppress while chunked prefill is still consuming prompt tokens —
         # prompt-side states could otherwise masquerade as the first

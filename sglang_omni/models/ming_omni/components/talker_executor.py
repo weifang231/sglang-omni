@@ -253,8 +253,9 @@ class MingTalkerExecutor:
     async def abort(self, request_id: str) -> None:
         self._aborted.add(request_id)
 
-    def should_generate_audio(self, payload: StagePayload) -> bool:
-        modalities = self._output_modalities(payload)
+    @classmethod
+    def should_generate_audio(cls, payload: StagePayload) -> bool:
+        modalities = cls._output_modalities(payload)
         return modalities is None or "audio" in modalities
 
     @staticmethod

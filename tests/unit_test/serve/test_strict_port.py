@@ -33,3 +33,17 @@ def test_busy_port_hard_errors_under_strict(monkeypatch):
         busy = holder.getsockname()[1]
         with pytest.raises(RuntimeError, match="STRICT_PORT"):
             _find_available_port("127.0.0.1", busy)
+
+
+def test_closed_uvicorn_connection_does_not_change_the_requested_port(monkeypatch):
+    monkeypatch.setenv("SGLANG_OMNI_STRICT_PORT", "1")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        listener.listen(1)
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+            peer, _ = listener.accept()
+            peer.close()
+            assert client.recv(1) == b""
+    assert _find_available_port("127.0.0.1", port) == port

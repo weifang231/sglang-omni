@@ -282,6 +282,11 @@ def test_ming_config_and_stages_do_not_import_ming_runner() -> None:
 def _load_runner_with_fake_sglang(monkeypatch):
     torch = pytest.importorskip("torch")
 
+    platform_module = ModuleType("sglang_omni.platforms")
+    platform_module.current_platform = SimpleNamespace(
+        get_device=lambda gpu_id: torch.device("cpu")
+    )
+    monkeypatch.setitem(sys.modules, "sglang_omni.platforms", platform_module)
     scheduler_module = ModuleType("sglang.srt.managers.scheduler")
 
     class GenerationBatchResult:

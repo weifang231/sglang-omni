@@ -117,6 +117,22 @@ def test_streaming_tts_combined_builder_keeps_audio_only_off_decode():
     assert bytes(msgs[0].data.tolist()).decode("utf-8") == "Hello"
 
 
+def test_streaming_tts_combined_builder_keeps_text_only_off_segmenter():
+    builder = make_combined_stream_output_builder(
+        make_text_stream_output_builder(),
+        make_thinker_stream_output_builder(
+            tokenizer=_FakeTokenizer(), eos_token_id=None
+        ),
+    )
+    req = _make_req()
+    data = _make_req_data(req, output_modalities=["text"])
+
+    messages = builder("text-only", data, _make_req_output(5))
+
+    assert [message.target for message in messages] == ["decode"]
+    assert req._ming_stream_token_ids is None
+
+
 def test_thinker_stream_builder_suppresses_during_chunked_prefill():
     builder = make_thinker_stream_output_builder(
         tokenizer=_FakeTokenizer(),

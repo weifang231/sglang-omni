@@ -544,10 +544,8 @@ class MingOmniTalker(nn.Module):
                 else:
                     past_seen_tokens = past_key_values.get_seq_length()
                     cache_position = torch.arange(
-                        past_seen_tokens,
-                        past_seen_tokens + inputs_embeds.shape[1],
-                        device=inputs_embeds.device,
-                    )
+                        inputs_embeds.shape[1], device=inputs_embeds.device
+                    ) + past_seen_tokens
 
                     if model_graph is None:
                         model_graph = torch.cuda.CUDAGraph()
@@ -998,7 +996,7 @@ class MingOmniTalker(nn.Module):
         speech_parts = []
         spk_emb_list = []
         for x in prompt_wav_path:
-            speech_tmp, sample_rate = torchaudio.load(x, backend="soundfile")
+            speech_tmp, sample_rate = torchaudio.load(x)
             speech_tmp1 = speech_tmp.clone()
             if sample_rate != audio_detokenizer.config.sample_rate:
                 speech_tmp = torchaudio.transforms.Resample(
