@@ -13,6 +13,7 @@ from sglang_omni.models.ming_omni.io import MingOmniPipelineState
 from sglang_omni.models.ming_omni.pipeline.next_stage import AUDIO_STAGE, IMAGE_STAGE
 from sglang_omni.models.ming_omni.tp_utils import validate_stage_tp_support
 from sglang_omni.proto import StagePayload
+from sglang_omni.utils.device import place_device_spec
 
 
 def project_preprocessing_to_audio_encoder(payload: StagePayload) -> StagePayload:
@@ -214,12 +215,13 @@ def create_audio_encoder_executor(
     model_path: str,
     *,
     device: str = "cuda",
+    gpu_id: int | None = None,
     dtype: str | None = None,
 ):
     from sglang_omni.models.ming_omni.components.audio_encoder import MingAudioEncoder
     from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 
-    model = MingAudioEncoder(model_path=model_path, device=device, dtype=dtype)
+    model = MingAudioEncoder(model_path=model_path, device=place_device_spec(device, gpu_id), dtype=dtype)
 
     def _encode(payload: StagePayload) -> StagePayload:
         state = MingOmniPipelineState.from_dict(payload.data)
@@ -245,6 +247,7 @@ def create_image_encoder_executor(
     model_path: str,
     *,
     device: str = "cuda",
+    gpu_id: int | None = None,
     dtype: str | None = None,
     tp_rank: int = 0,
     tp_size: int = 1,
@@ -255,7 +258,7 @@ def create_image_encoder_executor(
 
     model = MingImageEncoder(
         model_path=model_path,
-        device=device,
+        device=place_device_spec(device, gpu_id),
         dtype=dtype,
         tp_rank=tp_rank,
         tp_size=tp_size,
@@ -325,6 +328,7 @@ def create_talker_executor(
     *,
     talker_model_path: str | None = None,
     device: str = "cuda",
+    gpu_id: int | None = None,
     voice: str = "DB30",
 ):
     from sglang_omni.models.ming_omni.components.talker_executor import (
@@ -337,7 +341,7 @@ def create_talker_executor(
     executor = MingTalkerExecutor(
         model_path=local_path,
         talker_model_path=talker_model_path,
-        device=device,
+        device=place_device_spec(device, gpu_id),
         voice=voice,
     )
     started = False
@@ -359,6 +363,7 @@ def create_streaming_talker_executor(
     model_path: str,
     *,
     device: str = "cuda",
+    gpu_id: int | None = None,
     voice: str = "DB30",
 ):
     """Factory for the streaming TTS talker stage.
@@ -375,7 +380,7 @@ def create_streaming_talker_executor(
     local_path = resolve_model_path(model_path)
     return MingStreamingTalkerScheduler(
         model_path=local_path,
-        device=device,
+        device=place_device_spec(device, gpu_id),
         voice=voice,
     )
 
