@@ -17,11 +17,38 @@ from sglang_omni.comm.engine import CommEngine
 from sglang_omni.config.schema import StageConfig
 from sglang_omni.models.fishaudio_s2_pro.config import S2ProPipelineConfig
 from sglang_omni.pipeline.stage.runtime import Stage
+from sglang_omni.pipeline.replicas import ReplicaTopology
 from sglang_omni.pipeline.stage.stream_queue import StreamItem, StreamQueue
 from sglang_omni.proto import DataReadyMessage, OmniRequest, StagePayload
 from sglang_omni.relay.shm import ShmRelay
 from sglang_omni.scheduling.messages import OutgoingMessage
 from tests.unit_test.fixtures.trace_capture import capture_comm_trace, events_named
+
+
+@pytest.mark.parametrize("replica_id", [0, 1])
+def test_policy_stream_edges_use_logical_source_and_destination(replica_id):
+    stage = object.__new__(Stage)
+    stage.name = f"talker@r{replica_id}"
+    stage._replica_topology = ReplicaTopology.from_dict({
+        "segmenter": ["segmenter@r0", "segmenter@r1"],
+        "talker": ["talker@r0", "talker@r1"],
+    })
+    acquired = []
+    stage._runtime_policy = SimpleNamespace(
+        topology={"stream_edges": [["segmenter", "talker"]]},
+        acquired=lambda *args, **kwargs: acquired.append((args, kwargs)),
+    )
+    stage.scheduler = SimpleNamespace(inbox=queue.Queue())
+    stage._open_pre_payload_stream_if_allowed = lambda _: True
+    asyncio.run(stage._route_stream_item_or_fail(
+        "req", StreamItem(chunk_id=0, data="audio", from_stage=f"segmenter@r{replica_id}")
+    ))
+    assert stage.scheduler.inbox.get_nowait().data.from_stage == "segmenter"
+    assert len(acquired) == 1
+    with pytest.raises(ValueError, match="undeclared policy edge"):
+        stage._route_stream_item("req", StreamItem(chunk_id=1, data="audio", from_stage="unknown"))
+    assert stage.scheduler.inbox.empty()
+    assert len(acquired) == 1
 
 
 class _FakeControlPlane:

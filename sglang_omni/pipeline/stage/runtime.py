@@ -1021,7 +1021,8 @@ class Stage:
 
     def _route_stream_item(self, request_id: str, item: StreamItem) -> None:
         if self._runtime_policy is not None:
-            if [item.from_stage, self.name] not in self._runtime_policy.topology["stream_edges"]:
+            edge = [item.from_stage, self._logical_source(self.name)]
+            if edge not in self._runtime_policy.topology["stream_edges"]:
                 raise ValueError("Stream work arrived over an undeclared policy edge")
             self._runtime_policy.acquired(request_id, item.metadata or {}, streaming=True)
         message = IncomingMessage(request_id=request_id, type="stream_chunk", data=item)
