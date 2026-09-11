@@ -707,17 +707,24 @@ def _register_chat_completions(app: FastAPI) -> None:
             audio_format = req.audio.get("format", "wav")
 
         if req.stream:
+            stream = _chat_stream(client, gen_req, request_id, response_id, created, model, req, audio_format)
+            if client.runtime_policy is not None:
+                try:
+                    first = await anext(stream)
+                except PolicyAdmissionRejected as exc:
+                    return JSONResponse(status_code=429, content={"error": {
+                        "type": "AdmissionRejectedError", "code": 429,
+                        "message": str(exc), "metadata": exc.receipt}})
+
+                async def prefetched():
+                    async with aclosing(stream):
+                        yield first
+                        async for event in stream:
+                            yield event
+
+                return _ClosableStreamingResponse(prefetched(), media_type="text/event-stream")
             return _ClosableStreamingResponse(
-                _chat_stream(
-                    client,
-                    gen_req,
-                    request_id,
-                    response_id,
-                    created,
-                    model,
-                    req,
-                    audio_format,
-                ),
+                stream,
                 media_type="text/event-stream",
             )
 
@@ -805,6 +812,24 @@ async def _chat_non_stream(
 
 
 async def _chat_stream(
+    client, gen_req, request_id, response_id, created, model, req, audio_format,
+) -> AsyncIterator[str]:
+    outcome = "cancelled"
+    stream = _chat_stream_body(client, gen_req, request_id, response_id, created, model, req, audio_format)
+    try:
+        async with aclosing(stream):
+            async for event in stream:
+                yield event
+        outcome = "completed"
+    except Exception:
+        outcome = "failed"
+        raise
+    finally:
+        if client.runtime_policy is not None:
+            client.runtime_frontend_event("request_terminal", request_id, outcome=outcome)
+
+
+async def _chat_stream_body(
     client: Client,
     gen_req: GenerateRequest,
     request_id: str,
@@ -899,6 +924,13 @@ async def _chat_stream(
             data = stream_resp.model_dump(exclude_none=True)
             for choice in data.get("choices", []):
                 choice.setdefault("finish_reason", None)
+            if client.runtime_policy is not None:
+                if delta.content:
+                    client.runtime_frontend_event("text_emit", request_id)
+                if delta.audio is not None:
+                    encoded = chunk.audio_b64
+                    size = len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
+                    client.runtime_policy.audio_emitting(request_id, chunk.metadata, size, chunk.sample_rate)
             yield f"data: {json.dumps(data)}\n\n"
 
     # Finish chunk: empty delta + finish_reason.

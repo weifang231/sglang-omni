@@ -217,6 +217,8 @@ class CompletionStreamChunk:
     text: str = ""
     modality: str = "text"
     audio_b64: str | None = None  # already base64-encoded
+    sample_rate: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     finish_reason: str | None = None
     usage: UsageInfo | None = None
     stage_name: str | None = None

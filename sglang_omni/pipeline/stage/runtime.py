@@ -146,7 +146,7 @@ class Stage:
             stream_receiver=can_accept_stream_before_payload,
             stream_targets=stream_targets, queue_control=queue_control,
         )
-        if self._runtime_policy is not None and self._runtime_policy.kind == "tts" and is_terminal:
+        if self._runtime_policy is not None and name == self._runtime_policy.audio_stage:
             observer = getattr(scheduler, "set_audio_ready_observer", None)
             if not callable(observer):
                 raise ValueError("TTS terminal scheduler must expose whole-waveform ready events")
@@ -1646,7 +1646,7 @@ class Stage:
 
         next_stages = self.get_next(request_id, result)
         if self._runtime_policy is not None:
-            expected = [b for a, b in self._runtime_policy.topology["payload_edges"] if a == self.name]
+            expected = self._runtime_policy.payload_targets(request_id)
             actual = [] if next_stages is None else [next_stages] if isinstance(next_stages, str) else next_stages
             if actual != expected:
                 raise ValueError("Actual payload routing differs from the declared policy topology")

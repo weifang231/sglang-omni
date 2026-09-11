@@ -213,6 +213,12 @@ class Client:
         buffered_audio_chunks: list[GenerateChunk] = []
         buffered_audio_samples = 0
         generate_stream = self.generate(request, request_id=request_id)
+        if self.runtime_policy is not None:
+            from sglang_omni.client.playback import policy_audio_stream
+
+            if audio_format != "pcm16" and "audio" in request.output_modalities:
+                raise ValueError("Policy chat streaming requires PCM16 audio")
+            generate_stream = policy_audio_stream(generate_stream, self.runtime_policy, request_id)
         async with aclosing(generate_stream):
             async for chunk in generate_stream:
                 if (
@@ -261,6 +267,8 @@ class Client:
                     text=text,
                     modality=chunk.modality,
                     audio_b64=audio_b64,
+                    sample_rate=chunk.sample_rate,
+                    metadata=chunk.metadata,
                     finish_reason=chunk.finish_reason,
                     usage=chunk.usage,
                     stage_name=chunk.stage_name,

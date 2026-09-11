@@ -14,6 +14,7 @@ from sglang_omni.client.types import GenerateRequest
 
 
 class _SubmitStubCoordinator:
+    _runtime_policy = None
     """Non-streaming coordinator stub: completion() only needs submit()."""
 
     def __init__(self, result: Any) -> None:
@@ -25,6 +26,7 @@ class _SubmitStubCoordinator:
 
 
 class _StreamStubCoordinator:
+    _runtime_policy = None
     """Streaming coordinator stub: yields the given StreamMessages in order."""
 
     def __init__(self, messages: list[Any]) -> None:

@@ -132,15 +132,11 @@ class MingTalkerExecutor:
         except (ImportError, Exception) as e:
             logger.warning("[TALKER] SpkembExtractor not available: %s", e)
 
-        # 7. Load text normalizer (optional)
-        try:
-            from talker_tn.talker_tn import TalkerTN
+        # 7. Load the model's required text normalizer.
+        from talker_tn.talker_tn import TalkerTN
 
-            self._talker.set_normalizer(TalkerTN())
-        except ImportError:
-            logger.warning(
-                "[TALKER] TalkerTN (pynini) not available — using identity normalizer"
-            )
+        self._talker.set_normalizer(TalkerTN())
+        logger.info("[TALKER] loaded official TalkerTN normalizer")
 
         # 8. Load AudioVAE
         vae_path = str(Path(self._talker_model_path) / "vae")

@@ -73,6 +73,7 @@ class MingStreamingTalkerScheduler:
         self._device = device
         self._voice = voice
         self._talker = talker
+        self._audio_ready_observer = None
         self._audio_detokenizer = audio_detokenizer
         self._sample_rate = sample_rate
 
@@ -258,6 +259,9 @@ class MingStreamingTalkerScheduler:
         raise RuntimeError("Talker has no streaming generation method")
 
     # ------------------------------------------------------------------ outbox
+    def set_audio_ready_observer(self, observer) -> None:
+        self._audio_ready_observer = observer
+
     def _emit_audio_chunk(
         self,
         request_id: str,
@@ -279,13 +283,16 @@ class MingStreamingTalkerScheduler:
         if state.first_audio_emit_ms is not None:
             payload["talker_first_audio_ms"] = state.first_audio_emit_ms
         state.audio_chunk_count += 1
+        metadata = {"modality": "audio", "segment_id": segment_id}
+        if self._audio_ready_observer is not None:
+            metadata.update(self._audio_ready_observer(request_id, payload))
         self.outbox.put(
             OutgoingMessage(
                 request_id=request_id,
                 type="stream",
                 target=None,
                 data=payload,
-                metadata={"modality": "audio", "segment_id": segment_id},
+                metadata=metadata,
             )
         )
 
@@ -349,6 +356,10 @@ class MingStreamingTalkerScheduler:
         else:
             array = np.asarray(waveform, dtype=np.float32)
         array = np.asarray(array, dtype=np.float32)
+        if array.ndim == 2 and min(array.shape) == 1:
+            array = array.reshape(-1)
+        if array.ndim != 1:
+            raise ValueError("Ming Talker must emit a mono waveform")
         return array.tobytes(), list(array.shape), str(array.dtype)
 
     def _resolve_sample_rate(self) -> int:
@@ -458,12 +469,10 @@ class MingStreamingTalkerScheduler:
         except (ImportError, Exception) as exc:
             logger.warning("[TALKER_STREAM] SpkembExtractor unavailable: %s", exc)
 
-        try:
-            from talker_tn.talker_tn import TalkerTN
+        from talker_tn.talker_tn import TalkerTN
 
-            talker.set_normalizer(TalkerTN())
-        except ImportError:
-            logger.warning("[TALKER_STREAM] TalkerTN unavailable; identity normalizer")
+        talker.set_normalizer(TalkerTN())
+        logger.info("[TALKER_STREAM] loaded official TalkerTN normalizer")
 
         vae_dir = str(Path(talker_dir) / "vae")
         vae = None

@@ -48,13 +48,6 @@ except ImportError:
     _HAS_ONNX = False
 
 
-class _IdentityNormalizer:
-    """Fallback when TalkerTN (pynini) is not available."""
-
-    def normalize(self, text: str) -> str:
-        return text
-
-
 class SpkembExtractor:
     """Extract speaker embeddings using CampPlus ONNX model."""
 
@@ -299,7 +292,7 @@ class MingOmniTalker(nn.Module):
 
         # --- External dependencies (set via setters) ---
         self.tokenizer = None
-        self.normalizer: Any = _IdentityNormalizer()
+        self.normalizer: Any = None
         self.spkemb_extractor = None
         self.voice_json_dict: dict = {}
 
@@ -333,6 +326,8 @@ class MingOmniTalker(nn.Module):
         self.tokenizer = tokenizer
 
     def set_normalizer(self, normalizer) -> None:
+        if not callable(getattr(normalizer, "normalize", None)):
+            raise TypeError("Talker requires a text normalizer")
         self.normalizer = normalizer
 
     def set_voice_presets(self, voice_dict: dict) -> None:
@@ -1233,6 +1228,8 @@ class MingOmniTalker(nn.Module):
         wds_lg_en,
         abort_event: threading.Event | None = None,
     ):
+        if self.normalizer is None:
+            raise RuntimeError("Talker text normalization must be installed before generation")
         sub_output_dict = cut_text_by_semantic_length(streaming_text, max_length)
         text_list = sub_output_dict["fragments"]
         if not text_list:
