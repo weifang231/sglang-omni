@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import numpy as np
+import pytest
 import torch
 
 from sglang_omni.models.ming_omni.components.streaming_talker import (
@@ -52,6 +53,25 @@ def _make_scheduler(**kwargs) -> MingStreamingTalkerScheduler:
         sample_rate=talker.sample_rate,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("done_first", [False, True])
+def test_talker_finishes_without_audio_chunks(done_first):
+    talker = _FakeTalker()
+    sched = _make_scheduler(talker=talker)
+    rid = "empty"
+    payload = StagePayload(request_id=rid, request=None, data={})
+    messages = [
+        IncomingMessage(request_id=rid, type="new_request", data=payload),
+        IncomingMessage(request_id=rid, type="stream_done"),
+    ]
+    for msg in reversed(messages) if done_first else messages:
+        sched._handle_message(msg)
+    outputs = _drain(sched, until_request_id=rid)
+    assert len(outputs) == 1 and outputs[0].type == "result"
+    assert outputs[0].data.data["audio_chunk_count"] == 0
+    assert not talker.calls
+    assert rid not in sched._states
 
 
 def _run(scheduler: MingStreamingTalkerScheduler) -> threading.Thread:

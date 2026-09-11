@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Iterator
 
+import pytest
+
 from sglang_omni.models.ming_omni.components.streaming_segmenter import (
     MingStreamingSegmenterScheduler,
 )
@@ -182,3 +184,20 @@ def test_segmenter_first_segment_timeout_emits_before_punctuation():
     assert non_empty, "first-segment timeout did not emit"
     first = uint8_tensor_to_text(non_empty[0].data)
     assert "hello" in first
+
+
+@pytest.mark.parametrize("done_first", [False, True])
+def test_segmenter_finishes_without_text_chunks(done_first):
+    sched = MingStreamingSegmenterScheduler(config=SegmenterConfig())
+    rid = "empty"
+    payload = StagePayload(request_id=rid, request=None, data={})
+    messages = [
+        IncomingMessage(request_id=rid, type="new_request", data=payload),
+        IncomingMessage(request_id=rid, type="stream_done"),
+    ]
+    for msg in reversed(messages) if done_first else messages:
+        sched._handle_message(msg)
+    outputs = _drain_outbox(sched, until_request_id=rid)
+    assert sum(msg.type == "result" for msg in outputs) == 1
+    assert all(msg.metadata["text_len"] == 0 for msg in outputs if msg.type == "stream")
+    assert rid not in sched._states

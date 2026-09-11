@@ -185,7 +185,8 @@ class MingStreamingTalkerScheduler:
         with self._states_lock:
             state = self._states.get(request_id)
             if state is None:
-                return
+                state = _RequestState()
+                self._states[request_id] = state
             state.stream_done = True
             should_finalize = state.payload_arrived and not state.finalized
         if should_finalize:

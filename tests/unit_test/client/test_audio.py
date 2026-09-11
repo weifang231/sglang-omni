@@ -16,6 +16,17 @@ from sglang_omni.client.audio import (
 )
 
 
+def test_chat_pcm16_encodes_raw_pcm_without_format_fallback():
+    audio = np.array([0.0, 0.25, -0.5, 1.0], dtype=np.float32)
+    encoded, mime = encode_audio(
+        audio, response_format="pcm16", sample_rate=44100,
+        allow_format_fallback=False,
+    )
+    assert encoded == encode_pcm(audio, 44100)
+    assert len(encoded) == 2 * len(audio)
+    assert mime == "audio/pcm"
+
+
 def _stereo_test_signal() -> tuple[np.ndarray, int]:
     sample_rate = 32000
     time = np.arange(sample_rate // 2, dtype=np.float32) / sample_rate

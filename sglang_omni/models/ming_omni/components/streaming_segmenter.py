@@ -173,7 +173,11 @@ class MingStreamingSegmenterScheduler:
         request_id = msg.request_id
         state = self._states.get(request_id)
         if state is None:
-            return
+            # Text-only requests can finish without sending any TTS chunks.
+            state = _RequestState(
+                segmenter=SegmenterState(self._config, self._token_count_fn),
+            )
+            self._states[request_id] = state
         state.stream_done = True
         if state.payload_arrived and not state.finalized:
             self._finalize(request_id, state)
