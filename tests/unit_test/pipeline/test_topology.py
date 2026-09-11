@@ -20,6 +20,7 @@ from sglang_omni.config import (
     compile_logical_processes,
 )
 from sglang_omni.config.manager import ConfigManager
+from sglang_omni.config.schema import PlacementConfig, ProcessConfig
 from sglang_omni.pipeline.replicas import expand_replica_stages
 
 _FACTORY = "tests.unit_test.fixtures.pipeline_fakes.dummy_factory"
@@ -56,6 +57,45 @@ def _topology(config: PipelineConfig):
         replica_instances=replica_topology.replicas,
     )
     return build_process_topology_plan(config, gpu_placement, stages_cfg=stages)
+
+
+def test_replication_preserves_native_colocation_on_distinct_devices():
+    config = PipelineConfig(
+        model_path="dummy",
+        placement=PlacementConfig(require_memory_fraction_for_colocation=False),
+        stages=[
+            _stage("encoder", gpu=0, process="encoder", next_stage="thinker"),
+            _stage("thinker", gpu=0, process="thinker", terminal=True),
+        ],
+        processes={name: ProcessConfig(num_replicas=2, replica_devices=[0, 1])
+                   for name in ("encoder", "thinker")},
+    )
+    _topology(config)
+
+
+def test_explicit_single_replica_devices_do_not_create_extra_colocation():
+    config = PipelineConfig(
+        model_path="dummy",
+        placement=PlacementConfig(require_memory_fraction_for_colocation=False),
+        stages=[
+            _stage("encoder", gpu=0, process="encoder", next_stage="thinker"),
+            _stage("thinker", gpu=0, process="thinker", terminal=True),
+        ],
+        processes={name: ProcessConfig(num_replicas=1, replica_devices=[0])
+                   for name in ("encoder", "thinker")},
+    )
+    _topology(config)
+
+
+def test_duplicate_process_replicas_on_one_gpu_still_require_budgets():
+    config = PipelineConfig(
+        model_path="dummy",
+        placement=PlacementConfig(require_memory_fraction_for_colocation=False),
+        stages=[_stage("thinker", gpu=0, process="thinker", terminal=True)],
+        processes={"thinker": ProcessConfig(num_replicas=2, replica_devices=[0, 0])},
+    )
+    with pytest.raises(ValueError, match="replica-induced GPU sharing"):
+        _topology(config)
 
 
 def test_stage_process_parses_from_schema_and_dotted_overrides() -> None:
