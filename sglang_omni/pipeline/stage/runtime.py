@@ -1006,7 +1006,7 @@ class Stage:
                 request_id=request_id,
                 type="stream_done",
             )
-            self.scheduler.inbox.put(message)
+            self._submit_scheduler_message(message)
 
     def _open_pre_payload_stream_if_allowed(self, request_id: str) -> bool:
         if self._stream_queue is None:
@@ -1024,9 +1024,8 @@ class Stage:
             edge = [item.from_stage, self._logical_source(self.name)]
             if edge not in self._runtime_policy.topology["stream_edges"]:
                 raise ValueError("Stream work arrived over an undeclared policy edge")
-            self._runtime_policy.acquired(request_id, item.metadata or {}, streaming=True)
         message = IncomingMessage(request_id=request_id, type="stream_chunk", data=item)
-        self.scheduler.inbox.put(message)
+        self._submit_scheduler_message(message)
 
     async def _execute(self, payload: Any) -> None:
         request_id = payload.request_id
@@ -1065,8 +1064,6 @@ class Stage:
 
     def _dispatch_payload(self, payload: Any) -> None:
         request_id = payload.request_id
-        if self._runtime_policy is not None:
-            self._runtime_policy.acquired(request_id, payload.request.metadata)
         _emit_event(
             request_id=request_id,
             stage=self.name,
@@ -1079,8 +1076,22 @@ class Stage:
         ):
             self._tp_fanout.fanout_work(payload)
         msg = IncomingMessage(request_id=request_id, type="new_request", data=payload)
+        self._submit_scheduler_message(msg)
+
+    def _submit_scheduler_message(self, message: IncomingMessage) -> None:
+        if self._runtime_policy is None:
+            self._deliver_scheduler_message(message)
+        else:
+            self._runtime_policy.dispatch(message, self._deliver_scheduler_message)
+
+    def _deliver_scheduler_message(self, msg: IncomingMessage) -> None:
+        if self._runtime_policy is not None:
+            if msg.type == "new_request":
+                self._runtime_policy.acquired(msg.request_id, msg.data.request.metadata)
+            elif msg.type == "stream_chunk":
+                self._runtime_policy.acquired(msg.request_id, msg.data.metadata or {}, streaming=True)
         enqueue = getattr(self.scheduler, "enqueue", None)
-        if enqueue is not None:
+        if msg.type == "new_request" and enqueue is not None:
             enqueue(msg)
         else:
             self.scheduler.inbox.put(msg)
