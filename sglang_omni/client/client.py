@@ -18,6 +18,7 @@ from sglang_omni.client.audio import (
     FORMAT_MIME_TYPES,
     audio_to_base64,
     encode_audio,
+    normalize_audio_format,
     to_numpy,
 )
 from sglang_omni.client.types import (
@@ -216,7 +217,7 @@ class Client:
         if self.runtime_policy is not None:
             from sglang_omni.client.playback import policy_audio_stream
 
-            if audio_format != "pcm16" and "audio" in request.output_modalities:
+            if normalize_audio_format(audio_format) != "pcm" and "audio" in request.output_modalities:
                 raise ValueError("Policy chat streaming requires PCM16 audio")
             generate_stream = policy_audio_stream(generate_stream, self.runtime_policy, request_id)
         async with aclosing(generate_stream):

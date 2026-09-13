@@ -1,6 +1,7 @@
 """Exercise text delivery and audio deadlines while engine output is idle."""
 
 import asyncio
+import base64
 from contextlib import aclosing
 from types import SimpleNamespace
 import time
@@ -9,6 +10,8 @@ import numpy as np
 import unittest
 
 from sglang_omni.client.playback import policy_audio_stream
+from sglang_omni.client.audio import encode_pcm
+from sglang_omni.client.client import Client
 from sglang_omni.client.types import GenerateChunk
 
 
@@ -24,6 +27,22 @@ class Policy:
 
 
 class PlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_policy_completion_accepts_pcm_aliases_with_identical_bytes(self):
+        audio = np.array([0, .25, -.5, 1], dtype=np.float32)
+
+        async def source():
+            yield GenerateChunk(request_id="x", modality="audio", audio_data=audio, sample_rate=44100)
+
+        client = SimpleNamespace(runtime_policy=Policy(), generate=lambda *args, **kwargs: source())
+        request = SimpleNamespace(metadata={}, output_modalities=["text", "audio"])
+        for fmt in ("pcm", "pcm16", " PCM16 "):
+            with self.subTest(format=fmt):
+                chunks = [chunk async for chunk in Client.completion_stream(
+                    client, request, request_id="x", audio_format=fmt)]
+                self.assertEqual(base64.b64decode(chunks[0].audio_b64), encode_pcm(audio, 44100))
+        with self.assertRaisesRegex(ValueError, "PCM16"):
+            await anext(Client.completion_stream(client, request, request_id="x", audio_format="wav"))
+
     async def test_text_passes_held_audio_and_timer_fires_without_another_chunk(self):
         finish = asyncio.Event()
         closed = []

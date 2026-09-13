@@ -320,6 +320,11 @@ def select_audio_delta(
     return audio[emitted_samples:], total_samples
 
 
+def normalize_audio_format(response_format: str) -> str:
+    fmt = response_format.lower().strip()
+    return "pcm" if fmt == "pcm16" else fmt
+
+
 def encode_audio(
     audio: Any,
     *,
@@ -341,9 +346,7 @@ def encode_audio(
     Returns:
         (encoded_bytes, mime_type)
     """
-    fmt = response_format.lower().strip()
-    if fmt == "pcm16":
-        fmt = "pcm"
+    fmt = normalize_audio_format(response_format)
     arr = to_numpy(audio)
 
     if arr.ndim > 1:
