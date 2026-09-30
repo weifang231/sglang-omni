@@ -1456,7 +1456,7 @@ def speech_generation_failure_response(
     unexpected_message: str | None = None,
 ) -> JSONResponse:
     mapped = speech_generation_error(exc)
-    if mapped.status_code not in (400, 503):
+    if mapped.status_code not in (400, 429, 503):
         logger.exception(
             unexpected_message or "Error generating speech for request %s",
             request_id,
@@ -1591,7 +1591,7 @@ def register_speech_batch(app: FastAPI) -> None:
             return speech_error_response(exc)
         except Exception as exc:
             mapped = speech_generation_error(exc)
-            if mapped.status_code not in (400, 503):
+            if mapped.status_code not in (400, 429, 503):
                 logger.exception(
                     "Error generating speech batch for request %s", request_id
                 )

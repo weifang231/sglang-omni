@@ -202,6 +202,7 @@ as the static superset because runtime prep derives stream receivers from it.
 | `endpoints` | `EndpointsConfig` | IPC defaults | Endpoint allocation settings. |
 | `placement` | `PlacementConfig` | defaults | Placement planning limits, e.g. `max_total_gpu_memory_fraction_per_gpu`. |
 | `terminal_stages_fn` | `str` or `None` | `None` | Dotted function path for request-aware terminal-stage resolution. |
+| `admission_policy` | `str` or `None` | `None` | Dotted path of a factory `f(*, config) -> AdmissionPolicy | None`. The coordinator consults the policy after the in-flight cap; a `False` rejects with HTTP 429. Unset or `None` keeps native admission. See [Pipeline: admission policy](pipeline.md#admission-policy). |
 | `config_cls` | `str` | class name | Stored automatically and used when loading a saved config file. |
 
 Class-level hooks a model config may declare:

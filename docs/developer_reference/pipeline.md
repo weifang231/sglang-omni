@@ -19,6 +19,63 @@ The coordinator is stage-implementation agnostic. In a tensor
 parallel stage group, it only talks to rank 0. Peer ranks stay internal to the
 stage group.
 
+#### Admission policy
+
+Native admission is the coordinator's in-flight cap (`max_running_requests +
+max_queued_requests` of the generation stage, HTTP 503 when full). A
+deployment can add its own decision behind that cap by naming a factory in
+`PipelineConfig.admission_policy` (YAML `admission_policy:` or CLI
+`--admission_policy module.make_policy`):
+
+```python
+def make_policy(*, config):
+    class Policy:
+        def admit(self, request_id, request) -> bool: ...   # False -> HTTP 429
+        def completed(self, request_id) -> None: ...        # terminal stage(s) succeeded
+        def aborted(self, request_id) -> None: ...          # failed, aborted, or shutdown
+        def close(self) -> None: ...                        # optional
+    return Policy()   # or None to keep native admission
+```
+
+`admit` runs on the coordinator loop for every submit that passed the cap and
+did not set `should_bypass_admission`; it sees the `OmniRequest` and may raise
+`AdmissionRejectedError(reason)` to attach a reason. Every admitted request is
+released exactly once through `completed` or `aborted`, including on submit
+failure, `fail_pending_requests`, and `stop`. Rejections surface at the speech
+endpoints as HTTP 429 `rate_limit_error` / `admission_rejected`, distinct from
+the 503 of a full queue, so a client or load balancer can retry elsewhere.
+The hook decides admission only; it does not schedule, reorder, or preempt.
+
+A static cap, the kind `max_in_flight` and `--audio_chunking.max_concurrent_long_audio_requests` implement, is the
+smallest policy that fits the contract:
+
+```python
+class ConcurrencyCap:
+    """Admit while fewer than `limit` admitted requests are still in the pipeline."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.in_flight: set[str] = set()
+
+    def admit(self, request_id, request) -> bool:
+        if len(self.in_flight) >= self.limit:
+            return False
+        self.in_flight.add(request_id)
+        return True
+
+    def completed(self, request_id) -> None:
+        self.in_flight.discard(request_id)
+
+    aborted = completed
+
+
+def make_policy(*, config):
+    return ConcurrencyCap(limit=8)
+```
+
+Anything that needs more than a count, such as looking at the request or at the time budget left, goes in `admit`
+the same way.
+
 ### Stage
 
 `Stage` is an IO shell. It handles all inter-stage communication. It receives control messages, reads

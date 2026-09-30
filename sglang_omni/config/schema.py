@@ -584,6 +584,7 @@ class PipelineConfig(BaseModel):
     weight_share: Literal["off", "on"] = "off"
     placement: PlacementConfig = Field(default_factory=PlacementConfig)
     placement_policy: str | None = None
+    admission_policy: str | None = None
     endpoints: EndpointsConfig = Field(default_factory=EndpointsConfig)
     terminal_stages_fn: str | None = None
     config_cls: str | None = None

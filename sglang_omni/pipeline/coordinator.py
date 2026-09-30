@@ -8,7 +8,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
 
-from sglang_omni.admission import QueueFullError
+from sglang_omni.admission import (
+    AdmissionPolicy,
+    AdmissionRejectedError,
+    QueueFullError,
+)
 from sglang_omni.config.topology import LogicalProcessPlan
 from sglang_omni.pipeline.control_plane import CoordinatorControlPlane
 from sglang_omni.pipeline.replicas import (
@@ -71,6 +75,7 @@ class Coordinator(CoordinatorSessions):
         logical_process_plan: LogicalProcessPlan | None = None,
         binding_policy: BindingPolicy | None = None,
         max_in_flight: int | None = None,
+        admission_policy: AdmissionPolicy | None = None,
     ):
         """Initialize coordinator.
 
@@ -86,6 +91,8 @@ class Coordinator(CoordinatorSessions):
             max_in_flight: If set, reject new submits once this many requests
                 are already tracked. Intended as generation capacity
                 (max_running_requests + max_queued_requests).
+            admission_policy: Optional hook consulted after the in-flight cap
+                for every non-bypassed submit; see ``sglang_omni.admission``.
         """
         super().__init__()
         self.entry_stage = entry_stage
@@ -108,6 +115,9 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.max_in_flight = value
+        self.admission_policy = admission_policy
+        # Request IDs the policy admitted and has not been told about yet.
+        self.admitted: set[str] = set()
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -154,6 +164,7 @@ class Coordinator(CoordinatorSessions):
         """Stop the coordinator."""
         await self.stop_sessions()
         self.running = False
+        self.close_admission_policy()
         self.control_plane.close()
         logger.info("Coordinator stopped")
 
@@ -178,6 +189,8 @@ class Coordinator(CoordinatorSessions):
                 )
             else:
                 pass
+        for request_id in list(self.admitted):
+            self.release_admission(request_id, completed=False)
         self.requests.clear()
         self.partial_results.clear()
         # Note (Junnan Li): Session pumps await request futures; wake them before waiting for cleanup.
@@ -471,6 +484,11 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
 
+        if not should_bypass_admission:
+            self.admit_request(request_id, request)
+        else:
+            pass
+
         if replica_bindings is None:
             replica_bindings = assign_replica_bindings(
                 self.logical_process_plan, self.binding_policy, request_id
@@ -523,15 +541,19 @@ class Coordinator(CoordinatorSessions):
             metadata={"entry_stage": self.entry_stage},
         )
 
-        await self.control_plane.submit_to_stage(
-            entry_instance,
-            entry_info.control_endpoint,
-            SubmitMessage(
-                request_id=request_id,
-                data=payload,
-                replica_bindings=replica_bindings,
-            ),
-        )
+        try:
+            await self.control_plane.submit_to_stage(
+                entry_instance,
+                entry_info.control_endpoint,
+                SubmitMessage(
+                    request_id=request_id,
+                    data=payload,
+                    replica_bindings=replica_bindings,
+                ),
+            )
+        except BaseException:
+            self.release_admission(request_id, completed=False)
+            raise
 
         # Update state
         info = self.requests.get(request_id)
@@ -545,6 +567,57 @@ class Coordinator(CoordinatorSessions):
                 f"Coordinator submitted req={request_id} to {entry_instance} "
                 f"at {entry_info.control_endpoint} bindings={replica_bindings}"
             )
+        else:
+            pass
+
+    def admit_request(self, request_id: str, request: OmniRequest) -> None:
+        """Ask the admission policy; raise ``AdmissionRejectedError`` on a no."""
+        policy = self.admission_policy
+        if policy is None:
+            return
+        else:
+            pass
+        if not policy.admit(request_id, request):
+            logger.warning(
+                "Rejecting request %s before pipeline submit: admission policy",
+                request_id,
+            )
+            raise AdmissionRejectedError()
+        else:
+            pass
+        self.admitted.add(request_id)
+
+    def release_admission(self, request_id: str, *, completed: bool) -> None:
+        """Tell the policy an admitted request left the pipeline (once)."""
+        if request_id not in self.admitted:
+            return
+        else:
+            pass
+        self.admitted.discard(request_id)
+        policy = self.admission_policy
+        if policy is None:
+            return
+        else:
+            pass
+        try:
+            if completed:
+                policy.completed(request_id)
+            else:
+                policy.aborted(request_id)
+        except Exception:
+            logger.exception("Admission policy release failed for req=%s", request_id)
+
+    def close_admission_policy(self) -> None:
+        """Release every admitted request and close the policy, if it can."""
+        for request_id in list(self.admitted):
+            self.release_admission(request_id, completed=False)
+        policy = self.admission_policy
+        close = getattr(policy, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.exception("Admission policy close failed")
         else:
             pass
 
@@ -647,6 +720,7 @@ class Coordinator(CoordinatorSessions):
 
         self.requests.pop(request_id, None)
         self.partial_results.pop(request_id, None)
+        self.release_admission(request_id, completed=False)
 
         logger.info("Coordinator aborted req=%s", request_id)
         return True
@@ -751,6 +825,7 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.requests.pop(request_id, None)
+            self.release_admission(request_id, completed=False)
             return
         else:
             pass
@@ -785,6 +860,7 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.requests.pop(request_id, None)
+            self.release_admission(request_id, completed=True)
             return
         else:
             pass
@@ -819,6 +895,7 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
         self.requests.pop(request_id, None)
+        self.release_admission(request_id, completed=True)
 
     async def handle_stream(self, msg: StreamMessage) -> None:
         """Handle a stream chunk from a stage."""

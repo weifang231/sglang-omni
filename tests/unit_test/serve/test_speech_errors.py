@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from sglang_omni.admission import QueueFullError
+from sglang_omni.admission import AdmissionRejectedError, QueueFullError
 from sglang_omni.serve.speech_errors import speech_generation_error
 
 
@@ -94,3 +94,19 @@ def test_auk_validation_reaches_http_as_bad_request(params, caplog):
     assert response.json()["error"]["type"] == "BadRequestError"
     assert "AuK" in response.json()["error"]["message"]
     assert not any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        AdmissionRejectedError(),
+        AdmissionRejectedError("capacity"),
+        RuntimeError(AdmissionRejectedError.MESSAGE),
+    ],
+)
+def test_admission_rejection_maps_to_429(exc: BaseException) -> None:
+    mapped = speech_generation_error(exc)
+    assert mapped.status_code == 429
+    assert mapped.error_type == "rate_limit_error"
+    assert mapped.code == "admission_rejected"
+    assert AdmissionRejectedError.MESSAGE in mapped.message

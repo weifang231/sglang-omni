@@ -14,6 +14,7 @@ import multiprocessing
 import socket
 from typing import Any
 
+from sglang_omni.admission import load_admission_policy
 from sglang_omni.config.placement import (
     StagePlacementPlan,
     resolve_gpu_stage_names,
@@ -623,6 +624,13 @@ class MultiProcessPipelineRunner:
                 self.config,
                 logical_process_plan=prep.logical_process_plan,
             )
+            admission_policy = load_admission_policy(self.config)
+            # Passed only when configured so the native call shape is unchanged.
+            coordinator_extra = (
+                {"admission_policy": admission_policy}
+                if admission_policy is not None
+                else {}
+            )
             self._coordinator = Coordinator(  # noqa: leading-underscore  # upstream spelling, or the public name is already taken
                 completion_endpoint=prep.endpoints["completion"],
                 abort_endpoint=prep.endpoints["abort"],
@@ -632,7 +640,16 @@ class MultiProcessPipelineRunner:
                 replica_topology=prep.replica_topology,
                 logical_process_plan=prep.logical_process_plan,
                 max_in_flight=max_in_flight,
+                **coordinator_extra,
             )
+            if admission_policy is not None:
+                logger.info(
+                    "Coordinator admission policy=%s (%s)",
+                    self.config.admission_policy,
+                    type(admission_policy).__name__,
+                )
+            else:
+                pass
             if max_in_flight is not None:
                 logger.info(
                     "Coordinator in-flight cap=%s (generation running+queued)",
