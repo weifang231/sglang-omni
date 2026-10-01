@@ -128,7 +128,7 @@ class Decision:
     admission: str  # "admit" | "reject"
     reason: str  # "probability_exceeds_price" | "deadline_or_price" | "capacity"
     occupancy: int
-    remaining_s: float
+    remaining_s: float | None
     probability: float | None
     price: float | None
 
@@ -361,7 +361,7 @@ class CapacityTablePolicy:
         elif self.profile is not None:
             return self.profile.deadline_s
         else:
-            return math.inf
+            return math.nan  # record mode: no deadline, nothing to decide
 
     def admit(self, request_id: str, request: Any) -> bool:
         now = self.clock()
@@ -369,7 +369,7 @@ class CapacityTablePolicy:
             occupancy = len(self.in_flight)
             remaining = self.remaining_budget(request, now)
             if self.profile is None:
-                decision = Decision("admit", "record", occupancy, remaining, None, None)
+                decision = Decision("admit", "record", occupancy, None, None, None)
             else:
                 decision = self.profile.decide(occupancy, remaining)
             reject = decision.admission == "reject" and self.mode == "apply"

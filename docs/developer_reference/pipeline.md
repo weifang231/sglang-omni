@@ -78,6 +78,47 @@ The contract:
 - The hook decides admission only; it does not schedule, reorder or preempt, and
   the in-flight cap stays in force underneath it.
 
+##### Built-in policy: capacity table
+
+`sglang_omni.admission_policies.capacity_table.make_policy` rejects, at
+admission, the requests that are unlikely to produce their first output within
+their deadline given how many requests are already executing. Above a
+deployment's knee this trades a few early 429s for a goodput plateau instead of
+a collapse (numbers in the PR that introduced it). It needs a *profile* fitted
+from the deployment's own traffic; the three modes make that a loop that stays
+inside the repository:
+
+```yaml
+admission_policy: sglang_omni.admission_policies.capacity_table.make_policy
+admission_policy_options:
+  mode: record                  # 1. admit everything, write events.jsonl
+  record_path: /var/log/sgl-omni/admission-events.jsonl
+```
+
+```bash
+# 2. fit: per occupancy, first-output latencies, departure rate, q and prices
+python -m sglang_omni.admission_policies.fit_capacity_table admission-events.jsonl \
+  --kind asr --deadline-s 0.5 --arrival-rate-rps 48 --output profile.json
+```
+
+```yaml
+admission_policy_options:
+  mode: shadow                  # 3. decide and record, never reject; then
+  profile: profile.json         # 4. mode: apply
+  arrival_rate_rps: 48          # re-solves the prices for the operating rate
+```
+
+The decision for a request arriving at occupancy `n` with `remaining` seconds
+of budget is: admit iff `n < capacity` and `q(n, remaining) > prices[n]`, where
+`q` is the recorded share of requests admitted at `n` whose first output came
+within `remaining - guard_s`, and `prices[n]` is the average-reward value of a
+slot solved from the fitted birth/death chain at `arrival_rate_rps`. `remaining`
+is `request.metadata["deadline_monotonic_s"] - time.monotonic()` when the
+deployment sets it, else the profile's `deadline_s`. The profile is specific to
+the model, hardware class, SLO and operating rate; refit when any of them
+changes (prices alone are re-solved from `arrival_rate_rps`). Single-route ASR
+and TTS deployments are supported; `kind: tts` scores time to first audio.
+
 ### Stage
 
 `Stage` is an IO shell. It handles all inter-stage communication. It receives control messages, reads
