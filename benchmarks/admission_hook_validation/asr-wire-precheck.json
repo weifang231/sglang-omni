@@ -1,0 +1,3 @@
+{
+  "response": "data: {\"type\":\"transcript.text.done\",\"text\":\"We asked over 20 different people, and they all said it was his.\",\"usage\":{\"type\":\"duration\",\"seconds\":4}}\n\ndata: [DONE]\n\n"
+}

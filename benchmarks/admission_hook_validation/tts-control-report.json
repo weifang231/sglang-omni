@@ -1,0 +1,383 @@
+{
+  "purpose": "Fixed-output-work diagnostic; greedy semantic and subtalker decoding, paired per-input seeds, max_new_tokens=32.",
+  "seeds": [
+    8201,
+    8202,
+    8203
+  ],
+  "requests_per_mode": 384,
+  "limitations": [
+    "Models remain on fixed GPUs 3/4/5 in this supplement; primary campaign rotates GPUs.",
+    "32-frame truncated outputs are a performance control, not an audio quality evaluation.",
+    "Three independent arrival seeds do not establish statistical equivalence."
+  ],
+  "modes": {
+    "base": {
+      "successes": 384,
+      "count": 384,
+      "first_ms": {
+        "p50": 50.290738232433796,
+        "p95": 60.45238589867949,
+        "p99": 71.80380769073969
+      },
+      "total_ms": {
+        "p50": 233.47113467752934,
+        "p95": 299.75310591980815,
+        "p99": 384.2832955904308
+      },
+      "output_bytes": {
+        "p50": 122880.0,
+        "p95": 122880.0,
+        "p99": 122880.0
+      },
+      "median_completion_throughput_rps": 1.9910861690702253,
+      "per_wave": [
+        {
+          "model": "tts",
+          "mode": "base",
+          "gpu": 3,
+          "seed": 8201,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.18112561479211,
+          "completion_throughput_rps": 1.9943557981242273,
+          "arrival_window_seconds": 63.90459965093477,
+          "successful_requests_per_arrival_window": 2.002985711500779,
+          "first_seconds": {
+            "p50": 0.0504456851631403,
+            "p95": 0.062451498489826916,
+            "p99": 0.0730727704614401
+          },
+          "total_seconds": {
+            "p50": 0.23708509001880884,
+            "p95": 0.3138001857325435,
+            "p99": 0.4189869475737216
+          },
+          "headers_seconds": {
+            "p50": 0.0503478916361928,
+            "p95": 0.06219586227089167,
+            "p99": 0.07281896825879815
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0011015860363841057,
+            "p95": 0.0019975439645349975,
+            "p99": 0.0021596813388168818
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "base",
+          "gpu": 3,
+          "seed": 8202,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 73.44133563898504,
+          "completion_throughput_rps": 1.7428876924190013,
+          "arrival_window_seconds": 73.21783036948852,
+          "successful_requests_per_arrival_window": 1.7482080437791887,
+          "first_seconds": {
+            "p50": 0.05076688341796398,
+            "p95": 0.05997125832363963,
+            "p99": 0.0664952845685184
+          },
+          "total_seconds": {
+            "p50": 0.23275139182806015,
+            "p95": 0.278664802480489,
+            "p99": 0.28897499086335304
+          },
+          "headers_seconds": {
+            "p50": 0.05038529075682163,
+            "p95": 0.05986085562035441,
+            "p99": 0.06640265757218003
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.00102192722260952,
+            "p95": 0.0020087206736207007,
+            "p99": 0.0022037957422435285
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "base",
+          "gpu": 3,
+          "seed": 8203,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.28651958331466,
+          "completion_throughput_rps": 1.9910861690702253,
+          "arrival_window_seconds": 64.05943056118926,
+          "successful_requests_per_arrival_window": 1.9981445179681236,
+          "first_seconds": {
+            "p50": 0.04933595657348633,
+            "p95": 0.05926650390028952,
+            "p99": 0.0732486876100302
+          },
+          "total_seconds": {
+            "p50": 0.23349477164447308,
+            "p95": 0.3014610333368182,
+            "p99": 0.3930124563910068
+          },
+          "headers_seconds": {
+            "p50": 0.049170433543622494,
+            "p95": 0.05905908439308404,
+            "p99": 0.0725696477480233
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0006988430395722389,
+            "p95": 0.0011995169334113591,
+            "p99": 0.0018446759693324572
+          }
+        }
+      ]
+    },
+    "unset": {
+      "successes": 384,
+      "count": 384,
+      "first_ms": {
+        "p50": 46.65203578770161,
+        "p95": 58.43134662136433,
+        "p99": 70.32262006774549
+      },
+      "total_ms": {
+        "p50": 232.66416508704424,
+        "p95": 287.60703625157475,
+        "p99": 396.3455305248502
+      },
+      "output_bytes": {
+        "p50": 122880.0,
+        "p95": 122880.0,
+        "p99": 122880.0
+      },
+      "median_completion_throughput_rps": 1.9909423632232623,
+      "per_wave": [
+        {
+          "model": "tts",
+          "mode": "unset",
+          "gpu": 4,
+          "seed": 8201,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.17803432792425,
+          "completion_throughput_rps": 1.9944518609898656,
+          "arrival_window_seconds": 63.90459965093477,
+          "successful_requests_per_arrival_window": 2.002985711500779,
+          "first_seconds": {
+            "p50": 0.047684223391115665,
+            "p95": 0.06248703617602586,
+            "p99": 0.07574342273175719
+          },
+          "total_seconds": {
+            "p50": 0.23727730009704828,
+            "p95": 0.30127442814409733,
+            "p99": 0.4174338403157891
+          },
+          "headers_seconds": {
+            "p50": 0.047569080255925655,
+            "p95": 0.06229731747880577,
+            "p99": 0.07567165588960054
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0009728828445076942,
+            "p95": 0.0022664126008749004,
+            "p99": 0.0028135319054126747
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "unset",
+          "gpu": 4,
+          "seed": 8202,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 73.44425849243999,
+          "completion_throughput_rps": 1.7428183309002396,
+          "arrival_window_seconds": 73.21783036948852,
+          "successful_requests_per_arrival_window": 1.7482080437791887,
+          "first_seconds": {
+            "p50": 0.046827955171465874,
+            "p95": 0.05513989450410008,
+            "p99": 0.06415807288140059
+          },
+          "total_seconds": {
+            "p50": 0.23043558280915022,
+            "p95": 0.27431865576654674,
+            "p99": 0.2873967752791941
+          },
+          "headers_seconds": {
+            "p50": 0.046388459391891956,
+            "p95": 0.05466584349051117,
+            "p99": 0.06394319901242852
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0006324565038084984,
+            "p95": 0.0010703888721764088,
+            "p99": 0.001107054427266121
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "unset",
+          "gpu": 4,
+          "seed": 8203,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.2911630012095,
+          "completion_throughput_rps": 1.9909423632232623,
+          "arrival_window_seconds": 64.05943056118926,
+          "successful_requests_per_arrival_window": 1.9981445179681236,
+          "first_seconds": {
+            "p50": 0.045075634494423866,
+            "p95": 0.05563389845192432,
+            "p99": 0.06251189501956106
+          },
+          "total_seconds": {
+            "p50": 0.23277989402413368,
+            "p95": 0.2923842008225619,
+            "p99": 0.4049309786595405
+          },
+          "headers_seconds": {
+            "p50": 0.044812172651290894,
+            "p95": 0.055406924989074464,
+            "p99": 0.062204535380005845
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0005145147442817688,
+            "p95": 0.0017366949468851068,
+            "p99": 0.002135975621640682
+          }
+        }
+      ]
+    },
+    "always": {
+      "successes": 384,
+      "count": 384,
+      "first_ms": {
+        "p50": 49.63117931038141,
+        "p95": 61.34954160079359,
+        "p99": 72.83584423363217
+      },
+      "total_ms": {
+        "p50": 234.4358554109931,
+        "p95": 298.6712057143449,
+        "p99": 385.7919921353461
+      },
+      "output_bytes": {
+        "p50": 122880.0,
+        "p95": 122880.0,
+        "p99": 122880.0
+      },
+      "median_completion_throughput_rps": 1.990973738717934,
+      "per_wave": [
+        {
+          "model": "tts",
+          "mode": "always",
+          "gpu": 5,
+          "seed": 8201,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.18820008821785,
+          "completion_throughput_rps": 1.9941359911024394,
+          "arrival_window_seconds": 63.90459965093477,
+          "successful_requests_per_arrival_window": 2.002985711500779,
+          "first_seconds": {
+            "p50": 0.05022116471081972,
+            "p95": 0.06584674492478368,
+            "p99": 0.09016476884484301
+          },
+          "total_seconds": {
+            "p50": 0.23583463858813047,
+            "p95": 0.30717941336333754,
+            "p99": 0.4139007861725988
+          },
+          "headers_seconds": {
+            "p50": 0.050052497535943985,
+            "p95": 0.0657507665455341,
+            "p99": 0.08996556485071788
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0005638282746076584,
+            "p95": 0.0010479119606316089,
+            "p99": 0.0011128920316696167
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "always",
+          "gpu": 5,
+          "seed": 8202,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 73.44356720522046,
+          "completion_throughput_rps": 1.7428347351693123,
+          "arrival_window_seconds": 73.21783036948852,
+          "successful_requests_per_arrival_window": 1.7482080437791887,
+          "first_seconds": {
+            "p50": 0.04943967517465353,
+            "p95": 0.05662506865337491,
+            "p99": 0.06742544969543816
+          },
+          "total_seconds": {
+            "p50": 0.2331868950277567,
+            "p95": 0.27523404052481054,
+            "p99": 0.287945478502661
+          },
+          "headers_seconds": {
+            "p50": 0.04915319848805666,
+            "p95": 0.05645112367346882,
+            "p99": 0.06714647362008692
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0006782999262213707,
+            "p95": 0.0012004471383988851,
+            "p99": 0.0020601110905408867
+          }
+        },
+        {
+          "model": "tts",
+          "mode": "always",
+          "gpu": 5,
+          "seed": 8203,
+          "count": 128,
+          "rate_rps": 2,
+          "successes": 128,
+          "duration_including_drain_seconds": 64.2901498451829,
+          "completion_throughput_rps": 1.990973738717934,
+          "arrival_window_seconds": 64.05943056118926,
+          "successful_requests_per_arrival_window": 1.9981445179681236,
+          "first_seconds": {
+            "p50": 0.04940662067383528,
+            "p95": 0.05899886460974811,
+            "p99": 0.07471804082393652
+          },
+          "total_seconds": {
+            "p50": 0.23657177202403545,
+            "p95": 0.30011682920157906,
+            "p99": 0.3883541944622994
+          },
+          "headers_seconds": {
+            "p50": 0.04930103104561567,
+            "p95": 0.05877788206562398,
+            "p99": 0.07442532576620584
+          },
+          "dispatch_lag_seconds": {
+            "p50": 0.0008818637579679489,
+            "p95": 0.0022826179862022395,
+            "p99": 0.0027986718527972703
+          }
+        }
+      ]
+    }
+  },
+  "paired_output_size_match": {
+    "unset": 0.9947916666666666,
+    "always": 0.9973958333333334
+  }
+}

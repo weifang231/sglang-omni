@@ -1,0 +1,70 @@
+[
+  {
+    "case": "nonstream",
+    "status": 429,
+    "body": {
+      "error": {
+        "message": "Admission rejected.",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "admission_rejected"
+      }
+    }
+  },
+  {
+    "case": "stream_pcm",
+    "status": 429,
+    "body": {
+      "error": {
+        "message": "Admission rejected.",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "admission_rejected"
+      }
+    }
+  },
+  {
+    "case": "stream_sse",
+    "status": 429,
+    "body": {
+      "error": {
+        "message": "Admission rejected.",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "admission_rejected"
+      }
+    }
+  },
+  {
+    "case": "batch",
+    "status": 200,
+    "body": {
+      "id": "speech-batch-364ef179-a98f-4041-bf9b-53035892b492",
+      "results": [
+        {
+          "index": 0,
+          "status": "error",
+          "error": {
+            "message": "Admission rejected.",
+            "type": "rate_limit_error",
+            "param": null,
+            "code": "admission_rejected"
+          }
+        },
+        {
+          "index": 1,
+          "status": "error",
+          "error": {
+            "message": "Admission rejected.",
+            "type": "rate_limit_error",
+            "param": null,
+            "code": "admission_rejected"
+          }
+        }
+      ],
+      "total": 2,
+      "succeeded": 0,
+      "failed": 2
+    }
+  }
+]

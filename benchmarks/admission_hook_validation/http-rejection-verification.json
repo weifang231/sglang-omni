@@ -1,0 +1,7 @@
+{
+  "all_checks_passed": true,
+  "single_request_429_cases": 3,
+  "batch_item_rejections": 2,
+  "coordinator_rejections": 5,
+  "unexpected_speech_exception_log": false
+}

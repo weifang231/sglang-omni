@@ -1,0 +1,258 @@
+[
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_10119832.wav",
+    "audio_seconds": 3.904
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_103675.wav",
+    "audio_seconds": 6.485333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_10933823.wav",
+    "audio_seconds": 7.677125
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_120405.wav",
+    "audio_seconds": 5.957791666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_1205005.wav",
+    "audio_seconds": 3.7013333333333334
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_123125.wav",
+    "audio_seconds": 4.512
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_125386.wav",
+    "audio_seconds": 3.978666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_137148.wav",
+    "audio_seconds": 4.974583333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_13900.wav",
+    "audio_seconds": 4.613333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_1416089.wav",
+    "audio_seconds": 4.464
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_15265.wav",
+    "audio_seconds": 6.552
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_153872.wav",
+    "audio_seconds": 3.168
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_155313.wav",
+    "audio_seconds": 3.874
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_15734837.wav",
+    "audio_seconds": 4.330416666666666
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_15735839.wav",
+    "audio_seconds": 3.1626666666666665
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_15903802.wav",
+    "audio_seconds": 5.354666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_16666041.wav",
+    "audio_seconds": 5.152
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_167249.wav",
+    "audio_seconds": 4.8853333333333335
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17147545.wav",
+    "audio_seconds": 4.832
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17161.wav",
+    "audio_seconds": 4.144
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17249419.wav",
+    "audio_seconds": 5.605333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17255102.wav",
+    "audio_seconds": 6.0
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17256676.wav",
+    "audio_seconds": 4.076291666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17259121.wav",
+    "audio_seconds": 5.0
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17263752.wav",
+    "audio_seconds": 3.8133333333333335
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17263780.wav",
+    "audio_seconds": 4.341333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17267923.wav",
+    "audio_seconds": 3.2
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17268075.wav",
+    "audio_seconds": 3.978666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17271507.wav",
+    "audio_seconds": 4.250666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17274522.wav",
+    "audio_seconds": 6.74
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17274533.wav",
+    "audio_seconds": 4.1066666666666665
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17275818.wav",
+    "audio_seconds": 3.776
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17277080.wav",
+    "audio_seconds": 5.824
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17278904.wav",
+    "audio_seconds": 5.973333333333334
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17281385.wav",
+    "audio_seconds": 4.32575
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17288057.wav",
+    "audio_seconds": 4.122208333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17324784.wav",
+    "audio_seconds": 5.199625
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17347410.wav",
+    "audio_seconds": 3.7637916666666666
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17352169.wav",
+    "audio_seconds": 7.76175
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_173534.wav",
+    "audio_seconds": 4.789333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17369337.wav",
+    "audio_seconds": 4.2
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17369851.wav",
+    "audio_seconds": 4.72
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17375252.wav",
+    "audio_seconds": 3.4
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17380945.wav",
+    "audio_seconds": 3.3007916666666666
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17389076.wav",
+    "audio_seconds": 4.643458333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17389984.wav",
+    "audio_seconds": 4.213333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17401431.wav",
+    "audio_seconds": 4.836833333333334
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17406452.wav",
+    "audio_seconds": 4.010666666666666
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17406732.wav",
+    "audio_seconds": 3.22125
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17429166.wav",
+    "audio_seconds": 5.0
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17442686.wav",
+    "audio_seconds": 3.224666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17444666.wav",
+    "audio_seconds": 3.52
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17451108.wav",
+    "audio_seconds": 3.7226666666666666
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17502.wav",
+    "audio_seconds": 5.381333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17519982.wav",
+    "audio_seconds": 4.408375
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_175348.wav",
+    "audio_seconds": 4.0355
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17578783.wav",
+    "audio_seconds": 3.6795
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17662945.wav",
+    "audio_seconds": 7.221333333333333
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17718576.wav",
+    "audio_seconds": 3.4524583333333334
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17727889.wav",
+    "audio_seconds": 6.70425
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17729945.wav",
+    "audio_seconds": 3.88175
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17736608.wav",
+    "audio_seconds": 5.802666666666667
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17738848.wav",
+    "audio_seconds": 4.946625
+  },
+  {
+    "relative_audio_path": "prompt-wavs/common_voice_en_17781154.wav",
+    "audio_seconds": 3.7173333333333334
+  }
+]
