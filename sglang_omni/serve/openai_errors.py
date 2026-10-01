@@ -7,7 +7,7 @@ import re
 
 from fastapi import HTTPException
 
-from sglang_omni.admission import AdmissionRejectedError
+from sglang_omni.admission import AdmissionRejectedError, QueueFullError
 
 _BAD_REQUEST_MARKERS = (
     "Unsupported language:",
@@ -60,8 +60,10 @@ def is_bad_request_error(exc: BaseException) -> bool:
 
 
 def admission_rejection(exc: BaseException) -> HTTPException | None:
-    """HTTP 429 for an admission-policy rejection (stringified over IPC), else None."""
+    """429 for a policy rejection, 503 for a full queue (both stringified over IPC), else None."""
     if AdmissionRejectedError.matches(exc):
         return HTTPException(status_code=429, detail=str(exc))
+    elif QueueFullError.matches(exc):
+        return HTTPException(status_code=503, detail=QueueFullError.MESSAGE)
     else:
         return None

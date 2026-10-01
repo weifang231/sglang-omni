@@ -200,3 +200,25 @@ def test_admission_rejection_reaches_transcription_http(stream, caplog) -> None:
     assert response.status_code == 429, response.text
     assert "Admission rejected" in response.json()["detail"]
     assert not any(record.exc_info for record in caplog.records)
+
+
+class QueueFullTranscriptionClient(RejectingTranscriptionClient):
+    async def completion(self, request, *, request_id, audio_format="wav"):
+        raise ClientError(QueueFullError.MESSAGE)
+
+    async def generate(self, request, request_id=None, **kwargs):
+        raise ClientError(QueueFullError.MESSAGE)
+        yield
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_queue_full_reaches_transcription_http_as_503(stream) -> None:
+    client = TestClient(create_app(QueueFullTranscriptionClient(), model_name="asr"))
+    data = {"model": "asr", **({"stream": "true"} if stream else {})}
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data=data,
+        files={"file": ("short.wav", silence_wav(), "audio/wav")},
+    )
+    assert response.status_code == 503, response.text
+    assert QueueFullError.MESSAGE in response.json()["detail"]
