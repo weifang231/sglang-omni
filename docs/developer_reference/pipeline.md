@@ -39,12 +39,37 @@ def make_policy(*, config):
 
 `admit` runs on the coordinator loop for every submit that passed the cap and
 did not set `should_bypass_admission`; it sees the `OmniRequest` and may raise
-`AdmissionRejectedError(reason)` to attach a reason. Every admitted request is
-released exactly once through `completed` or `aborted`, including on submit
+`AdmissionRejectedError(reason)` to attach a reason. For each successful admission the coordinator invokes
+one release callback, `completed` or `aborted`, including on submit
 failure, `fail_pending_requests`, and `stop`. Rejections surface at the speech
 endpoints as HTTP 429 `rate_limit_error` / `admission_rejected`, distinct from
 the 503 of a full queue, so a client or load balancer can retry elsewhere.
 The hook decides admission only; it does not schedule, reorder, or preempt.
+
+The existing in-flight cap remains a hard upper bound; the policy can reject
+additional requests within that bound. Request validation and routing resolution
+happen before the policy acquires a request. All callbacks run synchronously and
+must avoid blocking I/O. Returning `False` or raising from `admit` must leave no
+policy-owned reservation; other exceptions propagate as request failures.
+Release callbacks are attempted once. Their exceptions are logged without
+retrying or changing the request result, so policies must clean up their own
+state even when a callback fails. The optional `close` is called at most once.
+
+The policy tracks logical requests, not GPU execution occupancy. An `aborted`
+callback reports coordinator cancellation or failure; it does not acknowledge
+that every stage has stopped executing. A policy requiring execution occupancy
+must obtain separate stage telemetry. Failed or cancelled sends release local
+ownership; delivery may be ambiguous and this callback does not confirm a
+remote rollback. Session submits using `should_bypass_admission` are excluded
+from both policy decisions and lifecycle callbacks.
+
+A deadline-aware policy can read a deployment-defined field such as
+`request.metadata["deadline_monotonic_seconds"]` and compare it with
+`time.monotonic()` inside `admit`. The deployment must populate that field before
+submission, define when the budget starts, and use the coordinator's clock
+domain. This hook does not introduce an HTTP deadline field or propagate a
+client deadline automatically. A monotonic timestamp from another host is not
+a valid value for this example.
 
 A static cap, the kind `max_in_flight` and `--audio_chunking.max_concurrent_long_audio_requests` implement, is the
 smallest policy that fits the contract:

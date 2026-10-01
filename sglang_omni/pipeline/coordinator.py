@@ -484,11 +484,6 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
 
-        if not should_bypass_admission:
-            self.admit_request(request_id, request)
-        else:
-            pass
-
         if replica_bindings is None:
             replica_bindings = assign_replica_bindings(
                 self.logical_process_plan, self.binding_policy, request_id
@@ -507,41 +502,46 @@ class Coordinator(CoordinatorSessions):
             pass
         entry_info = self.stages[entry_instance]
 
-        # Track request
-        self.requests[request_id] = RequestInfo(
-            request_id=request_id,
-            state=RequestState.PENDING,
-            current_stage=self.entry_stage,
-            terminal_stages=(
-                self.resolve_terminal_stages(request)
-                if terminal_stages is None
-                else terminal_stages
-            ),
+        resolved_terminal_stages = (
+            self.resolve_terminal_stages(request)
+            if terminal_stages is None
+            else terminal_stages
         )
-
-        # Create future for completion
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        self.completion_futures[request_id] = future
-        if stream_queue is not None:
-            self.stream_queues[request_id] = stream_queue
-        else:
-            pass
-
         payload = StagePayload(
             request_id=request_id,
             request=request,
             data={"raw_inputs": request.inputs},
         )
-
-        _emit_event(
-            request_id=request_id,
-            stage="coordinator",
-            event_name="request_admission",
-            metadata={"entry_stage": self.entry_stage},
-        )
+        if not should_bypass_admission:
+            self.admit_request(request_id, request)
+        else:
+            pass
 
         try:
+            # Track request
+            self.requests[request_id] = RequestInfo(
+                request_id=request_id,
+                state=RequestState.PENDING,
+                current_stage=self.entry_stage,
+                terminal_stages=resolved_terminal_stages,
+            )
+
+            # Create future for completion
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future = loop.create_future()
+            self.completion_futures[request_id] = future
+            if stream_queue is not None:
+                self.stream_queues[request_id] = stream_queue
+            else:
+                pass
+
+            _emit_event(
+                request_id=request_id,
+                stage="coordinator",
+                event_name="request_admission",
+                metadata={"entry_stage": self.entry_stage},
+            )
+
             await self.control_plane.submit_to_stage(
                 entry_instance,
                 entry_info.control_endpoint,
@@ -552,6 +552,14 @@ class Coordinator(CoordinatorSessions):
                 ),
             )
         except BaseException:
+            self.requests.pop(request_id, None)
+            self.partial_results.pop(request_id, None)
+            future = self.completion_futures.pop(request_id, None)
+            if future is not None:
+                future.cancel()
+            else:
+                pass
+            self.stream_queues.pop(request_id, None)
             self.release_admission(request_id, completed=False)
             raise
 
@@ -612,6 +620,7 @@ class Coordinator(CoordinatorSessions):
         for request_id in list(self.admitted):
             self.release_admission(request_id, completed=False)
         policy = self.admission_policy
+        self.admission_policy = None
         close = getattr(policy, "close", None)
         if callable(close):
             try:

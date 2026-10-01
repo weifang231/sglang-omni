@@ -13,6 +13,7 @@ from sglang_omni.admission import (
     load_admission_policy,
 )
 from sglang_omni.pipeline.coordinator import Coordinator
+from sglang_omni.pipeline.replicas import ReplicaTopology
 from sglang_omni.proto import CompleteMessage, OmniRequest
 from tests.unit_test.fixtures.pipeline_fakes import RecordingCoordinatorControlPlane
 
@@ -152,6 +153,8 @@ def test_submit_failure_releases_the_admission() -> None:
             await coordinator.submit_request("req-1", "hello")
         assert policy.aborted_ids == ["req-1"]
         assert coordinator.admitted == set()
+        assert not coordinator.request_id_is_reserved("req-1")
+        assert coordinator.partial_results == {}
 
     asyncio.run(run())
 
@@ -277,5 +280,86 @@ def test_documented_concurrency_cap_behaves_like_the_in_flight_cap() -> None:
             "req-2",
             "req-3",
         ]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["entry", "terminal", "binding"])
+def test_invalid_submit_does_not_acquire_admission(failure: str) -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, _ = make_coordinator(policy)
+        if failure == "entry":
+            coordinator.stages.clear()
+        elif failure == "terminal":
+            coordinator.terminal_stages_resolver = lambda request: []
+        else:
+            coordinator.replica_topology = ReplicaTopology(
+                replicas={"preprocess": ("preprocess_0", "preprocess_1")}
+            )
+
+        with pytest.raises((ValueError, KeyError)):
+            await coordinator.submit_request("invalid", "hello", replica_bindings={})
+        assert policy.admitted == []
+        assert coordinator.admitted == set()
+        assert not coordinator.request_id_is_reserved("invalid")
+
+    asyncio.run(run())
+
+
+def test_cancelled_submit_releases_admission_and_local_state() -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, control_plane = make_coordinator(policy)
+        entered = asyncio.Event()
+
+        async def blocked_submit(stage, endpoint, message):
+            entered.set()
+            await asyncio.Future()
+
+        control_plane.submit_to_stage = blocked_submit
+        task = asyncio.create_task(coordinator.submit_request("cancelled", "hello"))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert policy.aborted_ids == ["cancelled"]
+        assert coordinator.admitted == set()
+        assert not coordinator.request_id_is_reserved("cancelled")
+        assert coordinator.partial_results == {}
+
+    asyncio.run(run())
+
+
+def test_release_failure_is_logged_without_duplicate_callback(caplog) -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, _ = make_coordinator(policy)
+
+        def failing_completed(request_id: str) -> None:
+            policy.completed_ids.append(request_id)
+            raise RuntimeError("release failed")
+
+        policy.completed = failing_completed
+        await coordinator.submit_request("done", "hello")
+        completion = CompleteMessage("done", "preprocess", True, result={})
+        await coordinator.handle_completion(completion)
+        await coordinator.handle_completion(completion)
+        assert policy.completed_ids == ["done"]
+        assert coordinator.admitted == set()
+        assert "release failed" in caplog.text
+
+    asyncio.run(run())
+
+
+def test_policy_close_is_called_once() -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        closed = []
+        policy.close = lambda: closed.append(True)
+        coordinator, _ = make_coordinator(policy)
+        await coordinator.stop()
+        await coordinator.stop()
+        assert closed == [True]
 
     asyncio.run(run())

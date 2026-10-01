@@ -7,8 +7,10 @@ Stage IPC stringifies exceptions; use ``matches()`` on the error classes.
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Protocol
 
+from sglang_omni.config.schema import PipelineConfig
+from sglang_omni.proto import OmniRequest
 from sglang_omni.utils.imports import import_string
 
 logger = logging.getLogger(__name__)
@@ -59,26 +61,20 @@ class AdmissionRejectedError(RuntimeError):
 
 
 class AdmissionPolicy(Protocol):
-    """Coordinator-side admission hook.
+    """Synchronous admission and logical request lifecycle callbacks.
 
-    ``admit`` runs synchronously on the coordinator's event loop for every
-    request that passed the in-flight cap and was not marked
-    ``should_bypass_admission``. Returning ``False`` (or raising
-    :class:`AdmissionRejectedError`) rejects the request with HTTP 429 before
-    anything is submitted to a stage. Every admitted request is released
-    exactly once: ``completed`` when its terminal stage(s) succeed, ``aborted``
-    when it fails, is aborted, or the coordinator shuts down. ``close`` is
-    optional and runs when the coordinator stops.
+    Callbacks must not block; see the pipeline documentation for ownership,
+    cancellation, and callback failure semantics. An optional close runs on stop.
     """
 
-    def admit(self, request_id: str, request: Any) -> bool: ...
+    def admit(self, request_id: str, request: OmniRequest) -> bool: ...
 
     def completed(self, request_id: str) -> None: ...
 
     def aborted(self, request_id: str) -> None: ...
 
 
-def load_admission_policy(config: Any) -> AdmissionPolicy | None:
+def load_admission_policy(config: PipelineConfig) -> AdmissionPolicy | None:
     """Build the policy named by ``config.admission_policy`` (dotted path).
 
     The path names a callable ``factory(*, config) -> AdmissionPolicy | None``.
@@ -99,7 +95,7 @@ def load_admission_policy(config: Any) -> AdmissionPolicy | None:
         pass
     policy = factory(config=config)
     if policy is None:
-        logger.info("admission_policy %s returned None; native admission stays", spec)
+        logger.info(f"admission_policy {spec} returned None; native admission stays")
         return None
     else:
         pass
