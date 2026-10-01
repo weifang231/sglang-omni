@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
 from sglang_omni.admission import AdmissionRejectedError, QueueFullError
+from sglang_omni.client.types import ClientError
+from sglang_omni.serve import create_app
 from sglang_omni.serve.speech_errors import speech_generation_error
 
 
@@ -110,3 +113,44 @@ def test_admission_rejection_maps_to_429(exc: BaseException) -> None:
     assert mapped.error_type == "rate_limit_error"
     assert mapped.code == "admission_rejected"
     assert AdmissionRejectedError.MESSAGE in mapped.message
+
+
+class RejectingSpeechClient:
+    async def speech(self, request, **kwargs):
+        raise ClientError(str(AdmissionRejectedError("capacity")))
+
+    async def generate(self, request, **kwargs):
+        raise ClientError(str(AdmissionRejectedError("capacity")))
+        yield
+
+    async def abort(self, request_id):
+        return None
+
+
+@pytest.mark.parametrize("stream_format", [None, "audio", "sse"])
+def test_admission_rejection_reaches_speech_http(stream_format, caplog) -> None:
+    client = TestClient(create_app(RejectingSpeechClient(), model_name="test"))
+    payload = {"input": "Hello.", "response_format": "pcm"}
+    if stream_format is not None:
+        payload.update(stream=True, stream_format=stream_format)
+    response = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 429
+    assert response.json()["error"]["type"] == "rate_limit_error"
+    assert response.json()["error"]["code"] == "admission_rejected"
+    assert "capacity" in response.json()["error"]["message"]
+    assert not any(record.exc_info for record in caplog.records)
+
+
+def test_admission_rejection_reaches_each_batch_http_item() -> None:
+    client = TestClient(create_app(RejectingSpeechClient(), model_name="test"))
+    response = client.post(
+        "/v1/audio/speech/batch",
+        json={"items": [{"input": "Hello."}, {"input": "World."}]},
+    )
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 2
+    for result in results:
+        assert result["status"] == "error"
+        assert result["error"]["type"] == "rate_limit_error"
+        assert result["error"]["code"] == "admission_rejected"
