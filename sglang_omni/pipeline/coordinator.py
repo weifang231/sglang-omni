@@ -119,6 +119,8 @@ class Coordinator(CoordinatorSessions):
         self.admission_policy = admission_policy
         # Request IDs the policy admitted and has not been told about yet.
         self.admitted: set[str] = set()
+        # Admitted request IDs whose first output the policy has been told about.
+        self.first_output_seen: set[str] = set()
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -606,6 +608,25 @@ class Coordinator(CoordinatorSessions):
             pass
         self.admitted.add(request_id)
 
+    def notify_first_output(self, request_id: str) -> None:
+        """Tell the policy an admitted request produced its first output (once)."""
+        if request_id not in self.admitted or request_id in self.first_output_seen:
+            return
+        else:
+            pass
+        self.first_output_seen.add(request_id)
+        first_output = getattr(self.admission_policy, "first_output", None)
+        if not callable(first_output):
+            return
+        else:
+            pass
+        try:
+            first_output(request_id)
+        except Exception:
+            logger.exception(
+                "Admission policy first_output failed for req=%s", request_id
+            )
+
     def release_admission(self, request_id: str, *, completed: bool) -> None:
         """Tell the policy an admitted request left the pipeline (once)."""
         if request_id not in self.admitted:
@@ -613,6 +634,7 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
         self.admitted.discard(request_id)
+        self.first_output_seen.discard(request_id)
         policy = self.admission_policy
         if policy is None:
             return
@@ -880,6 +902,7 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.requests.pop(request_id, None)
+            self.notify_first_output(request_id)
             self.release_admission(request_id, completed=True)
             return
         else:
@@ -915,6 +938,7 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
         self.requests.pop(request_id, None)
+        self.notify_first_output(request_id)
         self.release_admission(request_id, completed=True)
 
     async def handle_stream(self, msg: StreamMessage) -> None:
@@ -930,6 +954,7 @@ class Coordinator(CoordinatorSessions):
             return
         else:
             pass
+        self.notify_first_output(request_id)
         _emit_event(
             request_id=request_id,
             stage="coordinator",

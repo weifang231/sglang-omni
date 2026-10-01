@@ -14,7 +14,7 @@ from sglang_omni.admission import (
 )
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.pipeline.replicas import ReplicaTopology
-from sglang_omni.proto import CompleteMessage, OmniRequest
+from sglang_omni.proto import CompleteMessage, OmniRequest, StreamMessage
 from tests.unit_test.fixtures.pipeline_fakes import RecordingCoordinatorControlPlane
 
 
@@ -428,5 +428,70 @@ def test_late_completion_after_failed_submit_is_ignored() -> None:
         )
         assert policy.completed_ids == [] and policy.aborted_ids == ["req-1"]
         assert not coordinator.request_id_is_reserved("req-1")
+
+    asyncio.run(run())
+
+
+class FirstOutputPolicy(RecordingPolicy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_outputs: list[str] = []
+
+    def first_output(self, request_id: str) -> None:
+        self.first_outputs.append(request_id)
+
+
+def test_first_output_is_reported_once_for_streams_and_at_completion_otherwise() -> (
+    None
+):
+    async def run() -> None:
+        policy = FirstOutputPolicy()
+        coordinator, _ = make_coordinator(policy)
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await coordinator.submit_request("stream", "hello", stream_queue=queue)
+        for chunk_id in (0, 1):
+            await coordinator.handle_stream(
+                StreamMessage(
+                    "stream", "preprocess", chunk={"i": chunk_id}, chunk_id=chunk_id
+                )
+            )
+        assert policy.first_outputs == ["stream"]
+        await coordinator.handle_completion(
+            CompleteMessage("stream", "preprocess", True, result={"ok": True})
+        )
+        assert policy.first_outputs == ["stream"]  # completion does not repeat it
+
+        await coordinator.submit_request("plain", "hello")
+        assert policy.first_outputs == ["stream"]
+        await coordinator.handle_completion(
+            CompleteMessage("plain", "preprocess", True, result={"ok": True})
+        )
+        assert policy.first_outputs == ["stream", "plain"]
+        assert policy.completed_ids == ["stream", "plain"]
+
+        await coordinator.submit_request("failed", "hello")
+        await coordinator.handle_completion(
+            CompleteMessage("failed", "preprocess", False, error="boom")
+        )
+        assert policy.first_outputs == ["stream", "plain"]  # no output on failure
+        assert coordinator.first_output_seen == set()
+
+    asyncio.run(run())
+
+
+def test_policy_without_first_output_is_fine() -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, _ = make_coordinator(policy)
+        queue: asyncio.Queue = asyncio.Queue()
+        await coordinator.submit_request("req-1", "hello", stream_queue=queue)
+        await coordinator.handle_stream(
+            StreamMessage("req-1", "preprocess", chunk={}, chunk_id=0)
+        )
+        await coordinator.handle_completion(
+            CompleteMessage("req-1", "preprocess", True, result={"ok": True})
+        )
+        assert policy.completed_ids == ["req-1"]
 
     asyncio.run(run())

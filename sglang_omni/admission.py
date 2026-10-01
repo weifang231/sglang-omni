@@ -65,7 +65,12 @@ class AdmissionPolicy(Protocol):
     """Synchronous admission and logical request lifecycle callbacks.
 
     Callbacks must not block; see the pipeline documentation for ownership,
-    cancellation, and callback failure semantics. An optional close runs on stop.
+    cancellation, and callback failure semantics. Two callbacks are optional:
+    ``first_output(request_id)`` runs when the coordinator forwards a request's
+    first stream chunk (or its completion, for non-streaming requests), which
+    is what a latency-aware policy needs to learn from its own traffic; ``close``
+    runs on stop. The factory receives the whole ``PipelineConfig``; policy
+    parameters live in ``config.admission_policy_options``.
     """
 
     def admit(self, request_id: str, request: OmniRequest) -> bool: ...
