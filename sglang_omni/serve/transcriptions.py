@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sglang_omni.client import Client, ClientError, GenerateRequest
 from sglang_omni.config import ResolvedAudioChunking
 from sglang_omni.serve import speech_to_text
-from sglang_omni.serve.openai_errors import is_bad_request_error
+from sglang_omni.serve.openai_errors import admission_rejection, is_bad_request_error
 from sglang_omni.serve.protocol import TranscriptionResponse, TranscriptionUsage
 from sglang_omni.serve.transcription_adapters import TranscriptionAdapter
 from sglang_omni.serve.transcription_chunking import (
@@ -335,6 +335,11 @@ async def transcribe_planned_upload(
             ),
         )
     except ClientError as exc:
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
@@ -343,6 +348,11 @@ async def transcribe_planned_upload(
     except (HTTPException, asyncio.CancelledError):
         raise
     except Exception as exc:
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:

@@ -25,7 +25,7 @@ from sglang_omni.client import (
     SamplingParams,
 )
 from sglang_omni.serve.generation_params import record_explicit_generation_params
-from sglang_omni.serve.openai_errors import is_bad_request_error
+from sglang_omni.serve.openai_errors import admission_rejection, is_bad_request_error
 from sglang_omni.serve.protocol import (
     TranscriptionResponse,
     TranscriptionTextDeltaEvent,
@@ -258,12 +258,22 @@ async def complete_speech_to_text_request(
     try:
         return await client.completion(gen_req, request_id=request_id)
     except ClientError as exc:
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
@@ -610,6 +620,11 @@ async def create_speech_to_text_streaming_response(
         )
     except ClientError as exc:
         await close_async_iterator_if_supported(chunk_stream)
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
@@ -617,6 +632,11 @@ async def create_speech_to_text_streaming_response(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         await close_async_iterator_if_supported(chunk_stream)
+        rejection = admission_rejection(exc)
+        if rejection is not None:
+            raise rejection from exc
+        else:
+            pass
         if is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:

@@ -154,3 +154,49 @@ def test_admission_rejection_reaches_each_batch_http_item() -> None:
         assert result["status"] == "error"
         assert result["error"]["type"] == "rate_limit_error"
         assert result["error"]["code"] == "admission_rejected"
+
+
+def silence_wav(duration_s: float = 0.5, sample_rate: int = 16000) -> bytes:
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\x00\x00" * int(duration_s * sample_rate))
+    return buffer.getvalue()
+
+
+class RejectingTranscriptionClient:
+    def health(self):
+        return {"running": True}
+
+    async def completion(self, request, *, request_id, audio_format="wav"):
+        raise ClientError(str(AdmissionRejectedError("capacity")))
+
+    async def generate(self, request, request_id=None, **kwargs):
+        raise ClientError(str(AdmissionRejectedError("capacity")))
+        yield
+
+    async def abort(self, request_id):
+        return None
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_admission_rejection_reaches_transcription_http(stream, caplog) -> None:
+    client = TestClient(create_app(RejectingTranscriptionClient(), model_name="asr"))
+    data = {"model": "asr"}
+    if stream:
+        data["stream"] = "true"
+    else:
+        pass
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data=data,
+        files={"file": ("short.wav", silence_wav(), "audio/wav")},
+    )
+    assert response.status_code == 429, response.text
+    assert "Admission rejected" in response.json()["detail"]
+    assert not any(record.exc_info for record in caplog.records)
