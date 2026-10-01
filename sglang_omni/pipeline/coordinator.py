@@ -2,13 +2,19 @@
 """Coordinator for managing the multi-stage pipeline."""
 
 import asyncio
+import inspect
 import logging
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
 
-from sglang_omni.admission import QueueFullError
+from sglang_omni.admission import (
+    AdmissionPolicy,
+    AdmissionRejectedError,
+    QueueFullError,
+)
 from sglang_omni.config.topology import LogicalProcessPlan
 from sglang_omni.pipeline.control_plane import CoordinatorControlPlane
 from sglang_omni.pipeline.replicas import (
@@ -71,6 +77,7 @@ class Coordinator(CoordinatorSessions):
         logical_process_plan: LogicalProcessPlan | None = None,
         binding_policy: BindingPolicy | None = None,
         max_in_flight: int | None = None,
+        admission_policy: AdmissionPolicy | None = None,
     ):
         """Initialize coordinator.
 
@@ -86,6 +93,8 @@ class Coordinator(CoordinatorSessions):
             max_in_flight: If set, reject new submits once this many requests
                 are already tracked. Intended as generation capacity
                 (max_running_requests + max_queued_requests).
+            admission_policy: Optional hook consulted after the in-flight cap
+                for every non-bypassed submit; see ``sglang_omni.admission``.
         """
         super().__init__()
         self.entry_stage = entry_stage
@@ -108,6 +117,15 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.max_in_flight = value
+        self.admission_policy = admission_policy
+        # Request IDs the policy admitted and has not been told about yet.
+        self.admitted: set[str] = set()
+        # Admitted request IDs whose first output the policy has been told about.
+        self.first_output_seen: set[str] = set()
+        # Policy rejections are summarised, not logged one per request: at high
+        # load they are the common case.
+        self.rejections_since_log = 0
+        self.rejection_log_at: float | None = None
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -152,7 +170,10 @@ class Coordinator(CoordinatorSessions):
 
     async def stop(self) -> None:
         """Stop the coordinator."""
-        await self.stop_sessions()
+        try:
+            await self.stop_sessions()
+        finally:
+            self.close_admission_policy()
         self.running = False
         self.control_plane.close()
         logger.info("Coordinator stopped")
@@ -178,6 +199,8 @@ class Coordinator(CoordinatorSessions):
                 )
             else:
                 pass
+        for request_id in list(self.admitted):
+            self.release_admission(request_id, completed=False)
         self.requests.clear()
         self.partial_results.clear()
         # Note (Junnan Li): Session pumps await request futures; wake them before waiting for cleanup.
@@ -489,49 +512,66 @@ class Coordinator(CoordinatorSessions):
             pass
         entry_info = self.stages[entry_instance]
 
-        # Track request
-        self.requests[request_id] = RequestInfo(
-            request_id=request_id,
-            state=RequestState.PENDING,
-            current_stage=self.entry_stage,
-            terminal_stages=(
-                self.resolve_terminal_stages(request)
-                if terminal_stages is None
-                else terminal_stages
-            ),
+        resolved_terminal_stages = (
+            self.resolve_terminal_stages(request)
+            if terminal_stages is None
+            else terminal_stages
         )
-
-        # Create future for completion
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        self.completion_futures[request_id] = future
-        if stream_queue is not None:
-            self.stream_queues[request_id] = stream_queue
-        else:
-            pass
-
         payload = StagePayload(
             request_id=request_id,
             request=request,
             data={"raw_inputs": request.inputs},
         )
+        if not should_bypass_admission:
+            self.admit_request(request_id, request)
+        else:
+            pass
 
-        _emit_event(
-            request_id=request_id,
-            stage="coordinator",
-            event_name="request_admission",
-            metadata={"entry_stage": self.entry_stage},
-        )
-
-        await self.control_plane.submit_to_stage(
-            entry_instance,
-            entry_info.control_endpoint,
-            SubmitMessage(
+        try:
+            # Track request
+            self.requests[request_id] = RequestInfo(
                 request_id=request_id,
-                data=payload,
-                replica_bindings=replica_bindings,
-            ),
-        )
+                state=RequestState.PENDING,
+                current_stage=self.entry_stage,
+                terminal_stages=resolved_terminal_stages,
+            )
+
+            # Create future for completion
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future = loop.create_future()
+            self.completion_futures[request_id] = future
+            if stream_queue is not None:
+                self.stream_queues[request_id] = stream_queue
+            else:
+                pass
+
+            _emit_event(
+                request_id=request_id,
+                stage="coordinator",
+                event_name="request_admission",
+                metadata={"entry_stage": self.entry_stage},
+            )
+
+            await self.control_plane.submit_to_stage(
+                entry_instance,
+                entry_info.control_endpoint,
+                SubmitMessage(
+                    request_id=request_id,
+                    data=payload,
+                    replica_bindings=replica_bindings,
+                ),
+            )
+        except BaseException:
+            self.requests.pop(request_id, None)
+            self.partial_results.pop(request_id, None)
+            future = self.completion_futures.pop(request_id, None)
+            if future is not None:
+                future.cancel()
+            else:
+                pass
+            self.stream_queues.pop(request_id, None)
+            self.release_admission(request_id, completed=False)
+            raise
 
         # Update state
         info = self.requests.get(request_id)
@@ -545,6 +585,103 @@ class Coordinator(CoordinatorSessions):
                 f"Coordinator submitted req={request_id} to {entry_instance} "
                 f"at {entry_info.control_endpoint} bindings={replica_bindings}"
             )
+        else:
+            pass
+
+    def admit_request(self, request_id: str, request: OmniRequest) -> None:
+        """Ask the admission policy; raise ``AdmissionRejectedError`` on a no."""
+        policy = self.admission_policy
+        if policy is None:
+            return
+        else:
+            pass
+        decision = policy.admit(request_id, request)
+        if inspect.isawaitable(decision):
+            decision.close()
+            raise TypeError(
+                "admission_policy.admit must be synchronous and return a bool"
+            )
+        else:
+            pass
+        if not decision:
+            self.log_rejection(request_id)
+            raise AdmissionRejectedError()
+        else:
+            pass
+        self.admitted.add(request_id)
+
+    def log_rejection(self, request_id: str, interval_s: float = 10.0) -> None:
+        """One warning per ``interval_s`` with the count, instead of one per rejection."""
+        self.rejections_since_log += 1
+        now = time.monotonic()
+        if (
+            self.rejection_log_at is not None
+            and now - self.rejection_log_at < interval_s
+        ):
+            return
+        else:
+            pass
+        logger.warning(
+            "Admission policy rejected %d request(s) since the last report "
+            "(latest req=%s); rejections answer HTTP 429",
+            self.rejections_since_log,
+            request_id,
+        )
+        self.rejections_since_log = 0
+        self.rejection_log_at = now
+
+    def notify_first_output(self, request_id: str) -> None:
+        """Tell the policy an admitted request produced its first output (once)."""
+        if request_id not in self.admitted or request_id in self.first_output_seen:
+            return
+        else:
+            pass
+        self.first_output_seen.add(request_id)
+        first_output = getattr(self.admission_policy, "first_output", None)
+        if not callable(first_output):
+            return
+        else:
+            pass
+        try:
+            first_output(request_id)
+        except Exception:
+            logger.exception(
+                "Admission policy first_output failed for req=%s", request_id
+            )
+
+    def release_admission(self, request_id: str, *, completed: bool) -> None:
+        """Tell the policy an admitted request left the pipeline (once)."""
+        if request_id not in self.admitted:
+            return
+        else:
+            pass
+        self.admitted.discard(request_id)
+        self.first_output_seen.discard(request_id)
+        policy = self.admission_policy
+        if policy is None:
+            return
+        else:
+            pass
+        try:
+            if completed:
+                policy.completed(request_id)
+            else:
+                policy.aborted(request_id)
+        except Exception:
+            logger.exception("Admission policy release failed for req=%s", request_id)
+
+    def close_admission_policy(self) -> None:
+        """Release every admitted request and close the policy, if it can."""
+        for request_id in list(self.admitted):
+            self.release_admission(request_id, completed=False)
+        policy = self.admission_policy
+        self.admission_policy = None
+        close = getattr(policy, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.exception("Admission policy close failed")
         else:
             pass
 
@@ -647,6 +784,7 @@ class Coordinator(CoordinatorSessions):
 
         self.requests.pop(request_id, None)
         self.partial_results.pop(request_id, None)
+        self.release_admission(request_id, completed=False)
 
         logger.info("Coordinator aborted req=%s", request_id)
         return True
@@ -751,6 +889,7 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.requests.pop(request_id, None)
+            self.release_admission(request_id, completed=False)
             return
         else:
             pass
@@ -785,6 +924,8 @@ class Coordinator(CoordinatorSessions):
             else:
                 pass
             self.requests.pop(request_id, None)
+            self.notify_first_output(request_id)
+            self.release_admission(request_id, completed=True)
             return
         else:
             pass
@@ -819,6 +960,8 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
         self.requests.pop(request_id, None)
+        self.notify_first_output(request_id)
+        self.release_admission(request_id, completed=True)
 
     async def handle_stream(self, msg: StreamMessage) -> None:
         """Handle a stream chunk from a stage."""
@@ -833,6 +976,7 @@ class Coordinator(CoordinatorSessions):
             return
         else:
             pass
+        self.notify_first_output(request_id)
         _emit_event(
             request_id=request_id,
             stage="coordinator",

@@ -377,6 +377,35 @@ python -m benchmarks.eval.benchmark_asr_realtime \
 
 Both `*_seedtts.py` scripts also support speech quality and similarity evaluation via UTMOS and WavLM speaker verification metrics. Running with `--utmos-only` or `--similarity-only` loads the respective pre-trained predictor and computes scores on the previously generated audio in the output directory without requiring the TTS/ASR servers to be running.
 
+### Admission hook overhead
+
+`benchmark_admission_overhead.py` times `Coordinator.submit_request` alone, with a
+fake control plane (no IPC, no model), for the admission-policy hook: `unset`
+(no `admission_policy`), `always_admit`, `reject_all`, and optionally the
+coordinator of another git revision as `base`. Modes are shuffled per round.
+
+```bash
+python -m benchmarks.eval.benchmark_admission_overhead --base-ref <upstream-main-sha> \
+  --requests 10000 --rounds 7 --output admission-overhead.json
+```
+
+### Open-loop SLO-goodput
+
+`benchmark_admission_openloop.py` sends requests at a fixed Poisson rate whether or not
+the server keeps up (the closed-loop sweeps above cannot exceed capacity) and scores the
+run by SLO-goodput: requests whose first output arrived within `--slo-s`, divided by
+the time from the first arrival through the last completion, including drain time
+(`total_span_s`), plus the 429/503 rejection counts. `late_rate_of_offered` uses all
+offered requests as its denominator; `late_rate_of_responses` uses successful responses
+with a measured first output (null when there are none). Use it to find a deployment's knee and
+to compare native admission with an admission policy under the same seeded traffic.
+
+```bash
+python -m benchmarks.eval.benchmark_admission_openloop --task asr --port 8000 \
+  --model-path openai/whisper-large-v3 --dataset seedtts-50 \
+  --rate 48 --requests 512 --slo-s 0.5 --seed 701 --output native-r48.json
+```
+
 ## TTS Quality Evaluation
 
 To evaluate the overall quality and vocal resemblance of synthesized speech, the benchmark suite supports offline evaluation using UTMOS (naturalness MOS prediction) and Speaker Similarity (vocal fidelity).

@@ -5,6 +5,10 @@ from __future__ import annotations
 
 import re
 
+from fastapi import HTTPException
+
+from sglang_omni.admission import AdmissionRejectedError, QueueFullError
+
 _BAD_REQUEST_MARKERS = (
     "Unsupported language:",
     "longer than the model's context length",
@@ -53,3 +57,13 @@ def is_bad_request_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _BAD_REQUEST_MARKERS) or any(
         pattern.search(message) is not None for pattern in _BAD_REQUEST_PATTERNS
     )
+
+
+def admission_rejection(exc: BaseException) -> HTTPException | None:
+    """429 for a policy rejection, 503 for a full queue (both stringified over IPC), else None."""
+    if AdmissionRejectedError.matches(exc):
+        return HTTPException(status_code=429, detail=str(exc))
+    elif QueueFullError.matches(exc):
+        return HTTPException(status_code=503, detail=QueueFullError.MESSAGE)
+    else:
+        return None

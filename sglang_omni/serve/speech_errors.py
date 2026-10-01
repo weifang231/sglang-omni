@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
-from sglang_omni.admission import QueueFullError
+from sglang_omni.admission import AdmissionRejectedError, QueueFullError
 from sglang_omni.serve.openai_errors import is_bad_request_error
 
 
@@ -124,10 +124,24 @@ def service_unavailable(message: str, *, param: str | None = None) -> SpeechAPIE
     )
 
 
+def too_many_requests(message: str, *, param: str | None = None) -> SpeechAPIError:
+    return SpeechAPIError(
+        message=message,
+        status_code=429,
+        error_type="rate_limit_error",
+        param=param,
+        code="admission_rejected",
+    )
+
+
 def speech_generation_error(exc: BaseException) -> SpeechAPIError:
     """Map pipeline failures to the shared speech API error contract."""
     if isinstance(exc, SpeechAPIError):
         return exc
+    else:
+        pass
+    if AdmissionRejectedError.matches(exc):
+        return too_many_requests(str(exc))
     else:
         pass
     if QueueFullError.matches(exc):

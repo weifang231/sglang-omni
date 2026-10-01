@@ -19,6 +19,116 @@ The coordinator is stage-implementation agnostic. In a tensor
 parallel stage group, it only talks to rank 0. Peer ranks stay internal to the
 stage group.
 
+#### Admission policy
+
+Native admission is the coordinator's in-flight cap (`max_running_requests +
+max_queued_requests` of the generation stage, HTTP 503 when full). A deployment
+can add its own decision behind that cap by naming a factory in
+`PipelineConfig.admission_policy` (YAML `admission_policy:` or CLI
+`--admission_policy module.make_policy`). The factory returns a policy object,
+or `None` to keep native admission:
+
+```python
+class ConcurrencyCap:
+    """Admit while fewer than `limit` admitted requests are still in the pipeline."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.in_flight: set[str] = set()
+
+    def admit(self, request_id, request) -> bool:   # False -> HTTP 429
+        if len(self.in_flight) >= self.limit:
+            return False
+        self.in_flight.add(request_id)
+        return True
+
+    def completed(self, request_id) -> None:        # terminal stage(s) succeeded
+        self.in_flight.discard(request_id)
+
+    aborted = completed                              # failed, aborted, or shutdown
+
+
+def make_policy(*, config):
+    return ConcurrencyCap(limit=8)
+```
+
+This static cap is the smallest policy that fits the interface; anything that
+needs more than a count, such as the request itself or the time budget left,
+goes in `admit` the same way. A deadline-aware policy can read a
+deployment-defined field such as `request.metadata["remaining_budget_s"]`
+(seconds of budget left when the request was handed to the pipeline); the
+deployment fills it before submit. The hook adds no HTTP deadline field.
+
+The contract:
+
+- `admit(request_id, request)` runs synchronously on the coordinator loop, after
+  the in-flight cap, request validation and routing resolution, for every submit
+  that did not set `should_bypass_admission` (session control operations). It
+  sees the `OmniRequest`. Returning `False`, or raising
+  `AdmissionRejectedError(reason)`, rejects the request before anything reaches
+  a stage; the speech endpoints answer HTTP 429 `rate_limit_error` /
+  `admission_rejected`, distinct from the 503 of a full queue. Any other
+  exception propagates and fails the request.
+- Every admitted request gets exactly one release call: `completed` when its
+  terminal stage(s) succeed, `aborted` on failure, abort, submit error,
+  `fail_pending_requests` or `stop`. A release that raises is logged and not
+  retried. `stop` also calls the optional `close` once.
+- Callbacks must not block. They count logical requests in the coordinator, not
+  GPU occupancy, and `aborted` does not mean every stage has stopped executing.
+- The hook decides admission only; it does not schedule, reorder or preempt, and
+  the in-flight cap stays in force underneath it.
+
+##### Built-in policy: capacity table
+
+`sglang_omni.admission_policies.capacity_table.make_policy` rejects, at
+admission, the requests that are unlikely to produce their first output within
+their deadline given how many requests are already executing. Above a
+deployment's knee this trades a few early 429s for a goodput plateau instead of
+a collapse (numbers in the PR that introduced it). It needs a *profile* fitted
+from the deployment's own traffic; the three modes make that a loop that stays
+inside the repository:
+
+```yaml
+admission_policy: sglang_omni.admission_policies.capacity_table.make_policy
+admission_policy_options:
+  mode: record                  # 1. admit everything, write events.jsonl
+  record_path: /var/log/sgl-omni/admission-events.jsonl
+```
+
+Record under load that reaches the occupancies you want the policy to decide
+about: traffic that stays far below the knee leaves the high-occupancy rows of
+the table with few samples, and `--capacity auto` stops where the samples run
+out. The file grows by one line per admission, first output and completion and
+is never rotated; record for a bounded period, then switch modes.
+
+```bash
+# 2. fit: per occupancy, first-output latencies, departure rate, q and prices
+python -m sglang_omni.admission_policies.fit_capacity_table admission-events.jsonl \
+  --kind asr --deadline-s 0.5 --arrival-rate-rps 48 --output profile.json
+```
+
+```yaml
+admission_policy_options:
+  mode: shadow                  # 3. decide and record, never reject; then
+  profile: profile.json         # 4. mode: apply
+  arrival_rate_rps: 48          # re-solves the prices for the operating rate
+```
+
+The decision for a request arriving at occupancy `n` with `remaining` seconds
+of budget is: admit iff `n < capacity` and `q(n, remaining) > prices[n]`, where
+`q` is the recorded share of requests admitted at `n` whose first output came
+within `remaining - guard_s`, and `prices[n]` is the average-reward value of a
+slot solved from the fitted birth/death chain at `arrival_rate_rps`. `remaining`
+is `request.metadata["remaining_budget_s"]` when the deployment sets it, else
+the profile's `deadline_s`. The profile is specific to
+the model, hardware class, SLO and operating rate; refit when any of them
+changes (prices alone are re-solved from `arrival_rate_rps`). Single-route ASR
+and TTS deployments are supported. "First output" is the first stream chunk the
+coordinator forwards, or the completion for non-streaming requests; check what
+that chunk is for your model before choosing the SLO (Qwen3-TTS streams a
+bootstrap chunk within milliseconds of admission, so for it use non-streaming
+requests with a completion deadline, or a different first-output signal).
+
 ### Stage
 
 `Stage` is an IO shell. It handles all inter-stage communication. It receives control messages, reads
