@@ -6,6 +6,7 @@ Stage IPC stringifies exceptions; use ``matches()`` on the error classes.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Protocol
 
@@ -108,6 +109,20 @@ def load_admission_policy(config: PipelineConfig) -> AdmissionPolicy | None:
         raise TypeError(
             f"admission_policy {spec!r} returned {type(policy).__name__} "
             f"without callable {', '.join(missing)}"
+        )
+    else:
+        pass
+    # The coordinator calls these synchronously; a coroutine function would
+    # return an (always truthy) coroutine and silently admit everything.
+    asynchronous = [
+        name
+        for name in ("admit", "completed", "aborted", "close")
+        if inspect.iscoroutinefunction(getattr(policy, name, None))
+    ]
+    if asynchronous:
+        raise TypeError(
+            f"admission_policy {spec!r} returned {type(policy).__name__} with async "
+            f"{', '.join(asynchronous)}; callbacks must be synchronous"
         )
     else:
         pass

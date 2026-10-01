@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import types
 
 import pytest
@@ -361,5 +362,72 @@ def test_policy_close_is_called_once() -> None:
         await coordinator.stop()
         await coordinator.stop()
         assert closed == [True]
+
+    asyncio.run(run())
+
+
+class AsyncPolicy(RecordingPolicy):
+    async def admit(self, request_id: str, request: OmniRequest) -> bool:
+        return False
+
+
+def make_async(*, config):
+    return AsyncPolicy()
+
+
+def test_loader_rejects_async_callbacks_at_startup() -> None:
+    with pytest.raises(TypeError, match="async admit"):
+        load_admission_policy(config_with(f"{__name__}.make_async"))
+
+
+def test_coordinator_refuses_an_awaitable_admit_result() -> None:
+    """A coroutine is truthy; without this guard an async policy admits everything."""
+
+    async def run() -> None:
+        policy = AsyncPolicy()
+        coordinator, control_plane = make_coordinator(policy)
+        with pytest.raises(TypeError, match="must be synchronous"):
+            await coordinator.submit_request("req-1", "hello")
+        assert control_plane.submitted == []
+        assert coordinator.admitted == set()
+        assert not coordinator.request_id_is_reserved("req-1")
+
+    asyncio.run(run())
+
+
+def test_stop_closes_the_policy_even_if_sessions_fail_to_stop() -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, _ = make_coordinator(policy)
+        await coordinator.submit_request("req-1", "hello")
+
+        async def failing_stop_sessions() -> None:
+            raise RuntimeError("sessions stuck")
+
+        coordinator.stop_sessions = failing_stop_sessions
+        with pytest.raises(RuntimeError, match="sessions stuck"):
+            await coordinator.stop()
+        assert policy.aborted_ids == ["req-1"]
+        assert policy.closed is True
+
+    asyncio.run(run())
+
+
+def test_late_completion_after_failed_submit_is_ignored() -> None:
+    async def run() -> None:
+        policy = RecordingPolicy()
+        coordinator, control_plane = make_coordinator(policy)
+
+        async def failing_submit(stage, endpoint, msg):
+            raise RuntimeError("control plane down")
+
+        control_plane.submit_to_stage = failing_submit
+        with pytest.raises(RuntimeError):
+            await coordinator.submit_request("req-1", "hello")
+        await coordinator.handle_completion(  # the stage answers anyway, late
+            CompleteMessage("req-1", "preprocess", True, result={"ok": True})
+        )
+        assert policy.completed_ids == [] and policy.aborted_ids == ["req-1"]
+        assert not coordinator.request_id_is_reserved("req-1")
 
     asyncio.run(run())

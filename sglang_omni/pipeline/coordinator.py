@@ -2,6 +2,7 @@
 """Coordinator for managing the multi-stage pipeline."""
 
 import asyncio
+import inspect
 import logging
 import uuid
 from collections.abc import Callable, Sequence
@@ -162,9 +163,11 @@ class Coordinator(CoordinatorSessions):
 
     async def stop(self) -> None:
         """Stop the coordinator."""
-        await self.stop_sessions()
+        try:
+            await self.stop_sessions()
+        finally:
+            self.close_admission_policy()
         self.running = False
-        self.close_admission_policy()
         self.control_plane.close()
         logger.info("Coordinator stopped")
 
@@ -585,7 +588,15 @@ class Coordinator(CoordinatorSessions):
             return
         else:
             pass
-        if not policy.admit(request_id, request):
+        decision = policy.admit(request_id, request)
+        if inspect.isawaitable(decision):
+            decision.close()
+            raise TypeError(
+                "admission_policy.admit must be synchronous and return a bool"
+            )
+        else:
+            pass
+        if not decision:
             logger.warning(
                 "Rejecting request %s before pipeline submit: admission policy",
                 request_id,
