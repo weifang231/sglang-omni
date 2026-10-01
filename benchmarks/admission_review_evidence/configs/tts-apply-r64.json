@@ -1,0 +1,24 @@
+{
+ "config_cls": "Qwen3TTSPipelineConfig",
+ "model_path": "/scr/rucnyz/projects/aproj/omni/models/qwen3-tts-base",
+ "stages": {
+  "tts_engine": {
+   "gpu": 0,
+   "engine": {
+    "mem_fraction_static": 0.3,
+    "cuda_graph_max_bs": 32,
+    "max_running_requests": 32
+   }
+  },
+  "vocoder": {
+   "gpu": 0
+  }
+ },
+ "admission_policy": "sglang_omni.admission_policies.capacity_table.make_policy",
+ "admission_policy_options": {
+  "mode": "apply",
+  "record_path": "/scr/rucnyz/projects/aproj/omni/runs/pr2-demo/events/tts-apply-r64.jsonl",
+  "profile": "/scr/rucnyz/projects/aproj/omni/runs/pr2-demo/profile-tts.json",
+  "arrival_rate_rps": 64.0
+ }
+}

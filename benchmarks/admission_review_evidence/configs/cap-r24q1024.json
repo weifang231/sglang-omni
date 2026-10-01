@@ -1,0 +1,18 @@
+{
+ "config_cls": "WhisperASRPipelineConfig",
+ "model_path": "/scr/rucnyz/projects/aproj/omni/models/whisper-large-v3",
+ "audio_chunking": {
+  "max_concurrent_long_audio_requests": 64
+ },
+ "stages": {
+  "asr": {
+   "gpu": 0,
+   "engine": {
+    "mem_fraction_static": 0.3,
+    "cuda_graph_max_bs": 24,
+    "max_running_requests": 24,
+    "max_queued_requests": 1024
+   }
+  }
+ }
+}

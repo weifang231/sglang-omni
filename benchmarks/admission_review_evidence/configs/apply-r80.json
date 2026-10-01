@@ -1,0 +1,24 @@
+{
+ "config_cls": "WhisperASRPipelineConfig",
+ "model_path": "/scr/rucnyz/projects/aproj/omni/models/whisper-large-v3",
+ "audio_chunking": {
+  "max_concurrent_long_audio_requests": 64
+ },
+ "stages": {
+  "asr": {
+   "gpu": 0,
+   "engine": {
+    "mem_fraction_static": 0.3,
+    "cuda_graph_max_bs": 64,
+    "max_running_requests": 64
+   }
+  }
+ },
+ "admission_policy": "sglang_omni.admission_policies.capacity_table.make_policy",
+ "admission_policy_options": {
+  "mode": "apply",
+  "record_path": "/scr/rucnyz/projects/aproj/omni/runs/pr2-demo/events/apply-r80.jsonl",
+  "profile": "/scr/rucnyz/projects/aproj/omni/runs/pr2-demo/profile-whisper.json",
+  "arrival_rate_rps": 80.0
+ }
+}

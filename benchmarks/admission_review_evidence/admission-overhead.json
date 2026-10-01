@@ -1,0 +1,212 @@
+{
+  "base_ref": "3a528172",
+  "python": "3.12.12 (main, Oct 14 2025, 21:25:31) [Clang 20.1.4 ]",
+  "requests_per_round": 10000,
+  "warmup_per_round": 1000,
+  "rounds": 7,
+  "scope": "coordinator submit dispatch with a fake control plane; no IPC, completion or model cost",
+  "results": {
+    "base": [
+      {
+        "p50_microseconds": 2.629,
+        "p95_microseconds": 2.75,
+        "p99_microseconds": 2.93,
+        "dispatches_per_second": 378108.8725931527
+      },
+      {
+        "p50_microseconds": 2.56,
+        "p95_microseconds": 2.75,
+        "p99_microseconds": 3.89,
+        "dispatches_per_second": 381965.8637107602
+      },
+      {
+        "p50_microseconds": 2.54,
+        "p95_microseconds": 2.67,
+        "p99_microseconds": 2.81,
+        "dispatches_per_second": 390736.11558286886
+      },
+      {
+        "p50_microseconds": 2.56,
+        "p95_microseconds": 2.69,
+        "p99_microseconds": 2.87,
+        "dispatches_per_second": 387377.31034249
+      },
+      {
+        "p50_microseconds": 2.551,
+        "p95_microseconds": 2.68,
+        "p99_microseconds": 2.91,
+        "dispatches_per_second": 387766.4944621516
+      },
+      {
+        "p50_microseconds": 2.55,
+        "p95_microseconds": 2.68,
+        "p99_microseconds": 2.97,
+        "dispatches_per_second": 388690.06744122494
+      },
+      {
+        "p50_microseconds": 2.57,
+        "p95_microseconds": 2.69,
+        "p99_microseconds": 2.85,
+        "dispatches_per_second": 387198.8647948802
+      }
+    ],
+    "unset": [
+      {
+        "p50_microseconds": 2.62,
+        "p95_microseconds": 2.75,
+        "p99_microseconds": 2.87,
+        "dispatches_per_second": 379764.4343999283
+      },
+      {
+        "p50_microseconds": 2.61,
+        "p95_microseconds": 2.75,
+        "p99_microseconds": 2.9,
+        "dispatches_per_second": 381110.53093384614
+      },
+      {
+        "p50_microseconds": 2.6,
+        "p95_microseconds": 2.72,
+        "p99_microseconds": 2.85,
+        "dispatches_per_second": 382954.52556702064
+      },
+      {
+        "p50_microseconds": 2.61,
+        "p95_microseconds": 2.74,
+        "p99_microseconds": 2.99,
+        "dispatches_per_second": 380321.9158792577
+      },
+      {
+        "p50_microseconds": 2.59,
+        "p95_microseconds": 2.72,
+        "p99_microseconds": 2.85,
+        "dispatches_per_second": 383631.56147597946
+      },
+      {
+        "p50_microseconds": 2.64,
+        "p95_microseconds": 4.09,
+        "p99_microseconds": 4.25,
+        "dispatches_per_second": 331272.8054410631
+      },
+      {
+        "p50_microseconds": 2.63,
+        "p95_microseconds": 2.77,
+        "p99_microseconds": 3.74,
+        "dispatches_per_second": 376796.63701465534
+      }
+    ],
+    "always_admit": [
+      {
+        "p50_microseconds": 3.12,
+        "p95_microseconds": 3.26,
+        "p99_microseconds": 3.42,
+        "dispatches_per_second": 318478.6605602842
+      },
+      {
+        "p50_microseconds": 3.07,
+        "p95_microseconds": 3.21,
+        "p99_microseconds": 3.44,
+        "dispatches_per_second": 324022.0205365157
+      },
+      {
+        "p50_microseconds": 3.06,
+        "p95_microseconds": 3.2,
+        "p99_microseconds": 3.37,
+        "dispatches_per_second": 325208.61400869273
+      },
+      {
+        "p50_microseconds": 3.08,
+        "p95_microseconds": 3.22,
+        "p99_microseconds": 3.389,
+        "dispatches_per_second": 322942.4657328979
+      },
+      {
+        "p50_microseconds": 3.05,
+        "p95_microseconds": 3.19,
+        "p99_microseconds": 3.38,
+        "dispatches_per_second": 324751.8627848037
+      },
+      {
+        "p50_microseconds": 3.05,
+        "p95_microseconds": 3.19,
+        "p99_microseconds": 3.38,
+        "dispatches_per_second": 325824.2040921109
+      },
+      {
+        "p50_microseconds": 3.04,
+        "p95_microseconds": 3.18,
+        "p99_microseconds": 3.42,
+        "dispatches_per_second": 326545.98789598513
+      }
+    ],
+    "reject_all": [
+      {
+        "p50_microseconds": 2.44,
+        "p95_microseconds": 2.53,
+        "p99_microseconds": 2.68,
+        "dispatches_per_second": 408223.0158259082
+      },
+      {
+        "p50_microseconds": 2.44,
+        "p95_microseconds": 2.53,
+        "p99_microseconds": 2.76,
+        "dispatches_per_second": 407634.9870011317
+      },
+      {
+        "p50_microseconds": 2.4,
+        "p95_microseconds": 2.49,
+        "p99_microseconds": 2.62,
+        "dispatches_per_second": 378503.5423389521
+      },
+      {
+        "p50_microseconds": 2.4,
+        "p95_microseconds": 2.49,
+        "p99_microseconds": 2.63,
+        "dispatches_per_second": 414756.28195049096
+      },
+      {
+        "p50_microseconds": 2.42,
+        "p95_microseconds": 2.52,
+        "p99_microseconds": 2.68,
+        "dispatches_per_second": 410631.51266711985
+      },
+      {
+        "p50_microseconds": 2.41,
+        "p95_microseconds": 2.51,
+        "p99_microseconds": 2.789,
+        "dispatches_per_second": 412386.3540530671
+      },
+      {
+        "p50_microseconds": 2.43,
+        "p95_microseconds": 2.53,
+        "p99_microseconds": 2.809,
+        "dispatches_per_second": 408203.03594476735
+      }
+    ]
+  },
+  "median_across_rounds": {
+    "base": {
+      "p50_microseconds": 2.56,
+      "p95_microseconds": 2.69,
+      "p99_microseconds": 2.91,
+      "dispatches_per_second": 387377.31034249
+    },
+    "unset": {
+      "p50_microseconds": 2.61,
+      "p95_microseconds": 2.75,
+      "p99_microseconds": 2.9,
+      "dispatches_per_second": 380321.9158792577
+    },
+    "always_admit": {
+      "p50_microseconds": 3.06,
+      "p95_microseconds": 3.2,
+      "p99_microseconds": 3.389,
+      "dispatches_per_second": 324751.8627848037
+    },
+    "reject_all": {
+      "p50_microseconds": 2.42,
+      "p95_microseconds": 2.52,
+      "p99_microseconds": 2.68,
+      "dispatches_per_second": 408223.0158259082
+    }
+  }
+}

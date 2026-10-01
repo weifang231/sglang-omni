@@ -1,0 +1,2408 @@
+{
+  "schema_version": 2,
+  "provenance": {
+    "schema_version": 1,
+    "repository": {
+      "commit": "2b37a38e2616a117625b0282703506daaf33c74c",
+      "branch": "admission-hook",
+      "dirty": false
+    },
+    "host": {
+      "platform": "Linux-5.15.0-157-generic-x86_64-with-glibc2.35",
+      "cpu_model": "AMD EPYC 9354 32-Core Processor",
+      "logical_cpus": 128,
+      "memory_total_kib": "1188601824 kB"
+    },
+    "gpu": {
+      "nvidia_smi_csv": "0, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-f55198e1-6867-dfde-a6e7-676f1a7b1948, 97887, 595.58.03, P0, 600.00, 2422, 12481, 12.0\n1, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-88620f51-4a5e-6c5a-2d6b-569a19fbd448, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n2, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-da2a2fbd-0e88-5f91-9e97-cb44f4d93db8, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n3, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-135b3e31-9445-a83c-ef72-ed44320c53ae, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n4, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-8a06049b-a412-c50b-597d-85e488d67033, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n5, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-522ef253-37ce-49b7-d802-d72de49eab5c, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n6, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-489fb407-a132-f6ba-9cb7-dfde60a2df5d, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0\n7, NVIDIA RTX PRO 6000 Blackwell Server Edition, GPU-3b5aad4d-07c1-d8d2-487a-8091d7850faa, 97887, 595.58.03, P8, 600.00, 180, 405, 12.0",
+      "cuda_visible_devices": "0",
+      "torch_cuda_build": "13.0",
+      "cudnn_version": 92000
+    },
+    "packages": {
+      "torch": "2.13.0+cu130",
+      "sglang": "0.5.20",
+      "sglang-omni": "0.1.3",
+      "transformers": "5.12.1",
+      "flash-attn-4": "4.0.0b19",
+      "flashinfer-python": "0.6.15.post1",
+      "sglang-kernel": "0.4.6.post1"
+    },
+    "dependency_inventory": [
+      {
+        "name": "accelerate",
+        "version": "1.14.0"
+      },
+      {
+        "name": "aiohappyeyeballs",
+        "version": "2.7.1"
+      },
+      {
+        "name": "aiohttp",
+        "version": "3.14.3"
+      },
+      {
+        "name": "aiosignal",
+        "version": "1.4.0"
+      },
+      {
+        "name": "airportsdata",
+        "version": "20260803"
+      },
+      {
+        "name": "annotated-doc",
+        "version": "0.0.5"
+      },
+      {
+        "name": "annotated-types",
+        "version": "0.8.0"
+      },
+      {
+        "name": "anthropic",
+        "version": "0.121.0"
+      },
+      {
+        "name": "antlr4-python3-runtime",
+        "version": "4.9.3"
+      },
+      {
+        "name": "anyio",
+        "version": "4.14.2"
+      },
+      {
+        "name": "apache-tvm-ffi",
+        "version": "0.1.11"
+      },
+      {
+        "name": "asttokens",
+        "version": "3.0.2"
+      },
+      {
+        "name": "attrs",
+        "version": "26.1.0"
+      },
+      {
+        "name": "autoflake",
+        "version": "2.4.0"
+      },
+      {
+        "name": "av",
+        "version": "16.1.0"
+      },
+      {
+        "name": "black",
+        "version": "26.5.1"
+      },
+      {
+        "name": "blobfile",
+        "version": "3.0.0"
+      },
+      {
+        "name": "build",
+        "version": "1.5.0"
+      },
+      {
+        "name": "certifi",
+        "version": "2026.7.22"
+      },
+      {
+        "name": "cffi",
+        "version": "2.1.1"
+      },
+      {
+        "name": "cfgv",
+        "version": "3.5.0"
+      },
+      {
+        "name": "charset-normalizer",
+        "version": "3.4.9"
+      },
+      {
+        "name": "click",
+        "version": "8.4.2"
+      },
+      {
+        "name": "cloudpickle",
+        "version": "3.1.2"
+      },
+      {
+        "name": "compressed-tensors",
+        "version": "0.18.0"
+      },
+      {
+        "name": "contourpy",
+        "version": "1.3.3"
+      },
+      {
+        "name": "cuda-bindings",
+        "version": "13.3.1"
+      },
+      {
+        "name": "cuda-core",
+        "version": "1.0.1"
+      },
+      {
+        "name": "cuda-pathfinder",
+        "version": "1.6.0"
+      },
+      {
+        "name": "cuda-python",
+        "version": "13.3.1"
+      },
+      {
+        "name": "cuda-tile",
+        "version": "1.5.0"
+      },
+      {
+        "name": "cuda-toolkit",
+        "version": "13.0.3.0"
+      },
+      {
+        "name": "cycler",
+        "version": "0.12.1"
+      },
+      {
+        "name": "datasets",
+        "version": "5.0.1"
+      },
+      {
+        "name": "decorator",
+        "version": "5.3.1"
+      },
+      {
+        "name": "decord2",
+        "version": "3.4.0"
+      },
+      {
+        "name": "diffusers",
+        "version": "0.37.0"
+      },
+      {
+        "name": "dill",
+        "version": "0.4.1"
+      },
+      {
+        "name": "diskcache",
+        "version": "5.6.3"
+      },
+      {
+        "name": "distlib",
+        "version": "0.4.3"
+      },
+      {
+        "name": "distro",
+        "version": "1.9.0"
+      },
+      {
+        "name": "docstring_parser",
+        "version": "0.18.0"
+      },
+      {
+        "name": "easydict",
+        "version": "1.13"
+      },
+      {
+        "name": "einops",
+        "version": "0.8.2"
+      },
+      {
+        "name": "einx",
+        "version": "0.4.3"
+      },
+      {
+        "name": "executing",
+        "version": "2.2.1"
+      },
+      {
+        "name": "fastapi",
+        "version": "0.141.1"
+      },
+      {
+        "name": "filelock",
+        "version": "3.29.0"
+      },
+      {
+        "name": "flash-attn-4",
+        "version": "4.0.0b19"
+      },
+      {
+        "name": "flashinfer-python",
+        "version": "0.6.15.post1"
+      },
+      {
+        "name": "flatbuffers",
+        "version": "25.12.19"
+      },
+      {
+        "name": "fonttools",
+        "version": "4.63.0"
+      },
+      {
+        "name": "frozendict",
+        "version": "2.4.7"
+      },
+      {
+        "name": "frozenlist",
+        "version": "1.8.0"
+      },
+      {
+        "name": "fsspec",
+        "version": "2026.4.0"
+      },
+      {
+        "name": "gguf",
+        "version": "0.19.0"
+      },
+      {
+        "name": "grpcio",
+        "version": "1.83.0"
+      },
+      {
+        "name": "grpcio-health-checking",
+        "version": "1.81.1"
+      },
+      {
+        "name": "grpcio-reflection",
+        "version": "1.81.1"
+      },
+      {
+        "name": "h11",
+        "version": "0.16.0"
+      },
+      {
+        "name": "hf-xet",
+        "version": "1.6.0"
+      },
+      {
+        "name": "httpcore",
+        "version": "1.0.9"
+      },
+      {
+        "name": "httpx",
+        "version": "0.28.1"
+      },
+      {
+        "name": "huggingface_hub",
+        "version": "1.27.0"
+      },
+      {
+        "name": "humming-kernels",
+        "version": "0.1.10"
+      },
+      {
+        "name": "identify",
+        "version": "2.6.20"
+      },
+      {
+        "name": "idna",
+        "version": "3.18"
+      },
+      {
+        "name": "importlib_metadata",
+        "version": "9.0.1"
+      },
+      {
+        "name": "iniconfig",
+        "version": "2.3.0"
+      },
+      {
+        "name": "interegular",
+        "version": "0.3.3"
+      },
+      {
+        "name": "ipython",
+        "version": "9.16.1"
+      },
+      {
+        "name": "ipython_pygments_lexers",
+        "version": "1.1.1"
+      },
+      {
+        "name": "isort",
+        "version": "9.0.2"
+      },
+      {
+        "name": "jedi",
+        "version": "0.20.0"
+      },
+      {
+        "name": "Jinja2",
+        "version": "3.1.6"
+      },
+      {
+        "name": "jiter",
+        "version": "0.16.0"
+      },
+      {
+        "name": "jiwer",
+        "version": "4.0.0"
+      },
+      {
+        "name": "joblib",
+        "version": "1.6.0"
+      },
+      {
+        "name": "jsonschema",
+        "version": "4.26.0"
+      },
+      {
+        "name": "jsonschema-specifications",
+        "version": "2025.9.1"
+      },
+      {
+        "name": "kernels",
+        "version": "0.14.1"
+      },
+      {
+        "name": "kernels-data",
+        "version": "0.16.0"
+      },
+      {
+        "name": "kiwisolver",
+        "version": "1.5.0"
+      },
+      {
+        "name": "lark",
+        "version": "1.3.1"
+      },
+      {
+        "name": "lazy-loader",
+        "version": "0.5"
+      },
+      {
+        "name": "librosa",
+        "version": "1.0.0"
+      },
+      {
+        "name": "llguidance",
+        "version": "1.7.6"
+      },
+      {
+        "name": "llvmlite",
+        "version": "0.47.0"
+      },
+      {
+        "name": "loguru",
+        "version": "0.7.3"
+      },
+      {
+        "name": "lxml",
+        "version": "6.1.1"
+      },
+      {
+        "name": "markdown-it-py",
+        "version": "4.2.0"
+      },
+      {
+        "name": "MarkupSafe",
+        "version": "3.0.3"
+      },
+      {
+        "name": "matplotlib",
+        "version": "3.11.1"
+      },
+      {
+        "name": "matplotlib-inline",
+        "version": "0.2.2"
+      },
+      {
+        "name": "mdurl",
+        "version": "0.1.2"
+      },
+      {
+        "name": "mistral_common",
+        "version": "1.11.7"
+      },
+      {
+        "name": "ml_dtypes",
+        "version": "0.5.4"
+      },
+      {
+        "name": "modelscope",
+        "version": "1.39.1"
+      },
+      {
+        "name": "modelscope-hub",
+        "version": "0.2.0"
+      },
+      {
+        "name": "more-itertools",
+        "version": "11.1.0"
+      },
+      {
+        "name": "mpmath",
+        "version": "1.3.0"
+      },
+      {
+        "name": "msgpack",
+        "version": "1.2.1"
+      },
+      {
+        "name": "msgspec",
+        "version": "0.21.1"
+      },
+      {
+        "name": "multidict",
+        "version": "6.7.1"
+      },
+      {
+        "name": "multiprocess",
+        "version": "0.70.19"
+      },
+      {
+        "name": "mypy_extensions",
+        "version": "1.1.0"
+      },
+      {
+        "name": "narwhals",
+        "version": "2.26.0"
+      },
+      {
+        "name": "nccl4py",
+        "version": "0.3.1"
+      },
+      {
+        "name": "nest-asyncio",
+        "version": "1.6.0"
+      },
+      {
+        "name": "networkx",
+        "version": "3.6.1"
+      },
+      {
+        "name": "ninja",
+        "version": "1.13.0"
+      },
+      {
+        "name": "nodeenv",
+        "version": "1.11.0"
+      },
+      {
+        "name": "numba",
+        "version": "0.65.1"
+      },
+      {
+        "name": "numpy",
+        "version": "2.3.5"
+      },
+      {
+        "name": "nvidia-cublas",
+        "version": "13.1.1.3"
+      },
+      {
+        "name": "nvidia-cuda-cccl",
+        "version": "13.3.3.4.1"
+      },
+      {
+        "name": "nvidia-cuda-crt",
+        "version": "13.3.73"
+      },
+      {
+        "name": "nvidia-cuda-cupti",
+        "version": "13.0.85"
+      },
+      {
+        "name": "nvidia-cuda-nvcc",
+        "version": "13.3.73"
+      },
+      {
+        "name": "nvidia-cuda-nvdisasm",
+        "version": "13.3.73"
+      },
+      {
+        "name": "nvidia-cuda-nvrtc",
+        "version": "13.0.88"
+      },
+      {
+        "name": "nvidia-cuda-runtime",
+        "version": "13.0.96"
+      },
+      {
+        "name": "nvidia-cudnn-cu13",
+        "version": "9.20.0.48"
+      },
+      {
+        "name": "nvidia-cudnn-frontend",
+        "version": "1.27.0"
+      },
+      {
+        "name": "nvidia-cufft",
+        "version": "12.0.0.61"
+      },
+      {
+        "name": "nvidia-cufile",
+        "version": "1.15.1.6"
+      },
+      {
+        "name": "nvidia-curand",
+        "version": "10.4.0.35"
+      },
+      {
+        "name": "nvidia-cusolver",
+        "version": "12.0.4.66"
+      },
+      {
+        "name": "nvidia-cusparse",
+        "version": "12.6.3.3"
+      },
+      {
+        "name": "nvidia-cusparselt-cu13",
+        "version": "0.8.1"
+      },
+      {
+        "name": "nvidia-cutlass-dsl",
+        "version": "4.6.0"
+      },
+      {
+        "name": "nvidia-cutlass-dsl-libs-base",
+        "version": "4.6.0"
+      },
+      {
+        "name": "nvidia-cutlass-dsl-libs-core",
+        "version": "4.6.0"
+      },
+      {
+        "name": "nvidia-cutlass-dsl-libs-cu12",
+        "version": "4.6.0"
+      },
+      {
+        "name": "nvidia-cutlass-dsl-libs-cu13",
+        "version": "4.6.0"
+      },
+      {
+        "name": "nvidia-mathdx",
+        "version": "25.6.0"
+      },
+      {
+        "name": "nvidia-ml-py",
+        "version": "13.610.43"
+      },
+      {
+        "name": "nvidia-nccl-cu13",
+        "version": "2.29.7"
+      },
+      {
+        "name": "nvidia-nvjitlink",
+        "version": "13.2.78"
+      },
+      {
+        "name": "nvidia-nvshmem-cu13",
+        "version": "3.4.5"
+      },
+      {
+        "name": "nvidia-nvtx",
+        "version": "13.0.85"
+      },
+      {
+        "name": "nvidia-nvvm",
+        "version": "13.3.73"
+      },
+      {
+        "name": "omegaconf",
+        "version": "2.3.1"
+      },
+      {
+        "name": "onnxruntime",
+        "version": "1.30.0"
+      },
+      {
+        "name": "openai",
+        "version": "2.6.1"
+      },
+      {
+        "name": "openai-harmony",
+        "version": "0.0.4"
+      },
+      {
+        "name": "openai-whisper",
+        "version": "20250625"
+      },
+      {
+        "name": "orjson",
+        "version": "3.11.9"
+      },
+      {
+        "name": "outlines",
+        "version": "0.1.11"
+      },
+      {
+        "name": "outlines_core",
+        "version": "0.1.26"
+      },
+      {
+        "name": "packaging",
+        "version": "26.3"
+      },
+      {
+        "name": "pandas",
+        "version": "3.0.5"
+      },
+      {
+        "name": "parso",
+        "version": "0.8.7"
+      },
+      {
+        "name": "partial-json-parser",
+        "version": "0.2.1.1.post7"
+      },
+      {
+        "name": "pathspec",
+        "version": "1.1.1"
+      },
+      {
+        "name": "pexpect",
+        "version": "4.9.0"
+      },
+      {
+        "name": "pillow",
+        "version": "12.3.0"
+      },
+      {
+        "name": "pip",
+        "version": "26.2.1"
+      },
+      {
+        "name": "platformdirs",
+        "version": "4.11.8"
+      },
+      {
+        "name": "pluggy",
+        "version": "1.6.0"
+      },
+      {
+        "name": "pooch",
+        "version": "1.9.0"
+      },
+      {
+        "name": "pre_commit",
+        "version": "4.6.2"
+      },
+      {
+        "name": "prometheus_client",
+        "version": "0.26.0"
+      },
+      {
+        "name": "prompt_toolkit",
+        "version": "3.0.53"
+      },
+      {
+        "name": "propcache",
+        "version": "0.5.2"
+      },
+      {
+        "name": "protobuf",
+        "version": "6.33.6"
+      },
+      {
+        "name": "psutil",
+        "version": "7.2.2"
+      },
+      {
+        "name": "ptyprocess",
+        "version": "0.7.0"
+      },
+      {
+        "name": "pure_eval",
+        "version": "0.2.3"
+      },
+      {
+        "name": "py-spy",
+        "version": "0.4.2"
+      },
+      {
+        "name": "pyarrow",
+        "version": "25.0.0"
+      },
+      {
+        "name": "pybase64",
+        "version": "1.5.0"
+      },
+      {
+        "name": "pycountry",
+        "version": "26.2.16"
+      },
+      {
+        "name": "pycparser",
+        "version": "3.0"
+      },
+      {
+        "name": "pycryptodomex",
+        "version": "3.23.0"
+      },
+      {
+        "name": "pydantic",
+        "version": "2.13.4"
+      },
+      {
+        "name": "pydantic-extra-types",
+        "version": "2.11.1"
+      },
+      {
+        "name": "pydantic_core",
+        "version": "2.46.4"
+      },
+      {
+        "name": "pyelftools",
+        "version": "0.33"
+      },
+      {
+        "name": "pyflakes",
+        "version": "4.0.1"
+      },
+      {
+        "name": "Pygments",
+        "version": "2.20.0"
+      },
+      {
+        "name": "pyparsing",
+        "version": "3.3.2"
+      },
+      {
+        "name": "pypdf",
+        "version": "6.15.0"
+      },
+      {
+        "name": "pyproject_hooks",
+        "version": "1.2.0"
+      },
+      {
+        "name": "pytest",
+        "version": "9.1.1"
+      },
+      {
+        "name": "pytest-asyncio",
+        "version": "1.4.0"
+      },
+      {
+        "name": "python-dateutil",
+        "version": "2.9.0.post0"
+      },
+      {
+        "name": "python-discovery",
+        "version": "1.6.1"
+      },
+      {
+        "name": "python-multipart",
+        "version": "0.0.32"
+      },
+      {
+        "name": "pytokens",
+        "version": "0.4.1"
+      },
+      {
+        "name": "PyYAML",
+        "version": "6.0.3"
+      },
+      {
+        "name": "pyzmq",
+        "version": "27.1.0"
+      },
+      {
+        "name": "quack-kernels",
+        "version": "0.6.3"
+      },
+      {
+        "name": "qwen-tts",
+        "version": "0.1.1"
+      },
+      {
+        "name": "qwen-vl-utils",
+        "version": "0.0.14"
+      },
+      {
+        "name": "RapidFuzz",
+        "version": "3.14.6"
+      },
+      {
+        "name": "ray",
+        "version": "2.57.0"
+      },
+      {
+        "name": "referencing",
+        "version": "0.37.0"
+      },
+      {
+        "name": "regex",
+        "version": "2026.7.19"
+      },
+      {
+        "name": "requests",
+        "version": "2.34.2"
+      },
+      {
+        "name": "rich",
+        "version": "15.0.0"
+      },
+      {
+        "name": "rpds-py",
+        "version": "2026.6.3"
+      },
+      {
+        "name": "ruff",
+        "version": "0.16.9"
+      },
+      {
+        "name": "safetensors",
+        "version": "0.8.0"
+      },
+      {
+        "name": "scikit-learn",
+        "version": "1.9.1"
+      },
+      {
+        "name": "scipy",
+        "version": "1.18.0"
+      },
+      {
+        "name": "sentencepiece",
+        "version": "0.2.2"
+      },
+      {
+        "name": "setproctitle",
+        "version": "1.3.7"
+      },
+      {
+        "name": "setuptools",
+        "version": "78.1.0"
+      },
+      {
+        "name": "setuptools-scm",
+        "version": "10.2.3"
+      },
+      {
+        "name": "sglang",
+        "version": "0.5.20",
+        "direct_url": {
+          "url": "file:///scr/rucnyz/projects/aproj/omni/third_party/sglang/python",
+          "dir_info": {
+            "editable": true
+          }
+        }
+      },
+      {
+        "name": "sglang-kernel",
+        "version": "0.4.6.post1"
+      },
+      {
+        "name": "sglang-omni",
+        "version": "0.1.3",
+        "direct_url": {
+          "url": "file:///scr/rucnyz/projects/aproj/omni/sglang-omni",
+          "dir_info": {
+            "editable": true
+          }
+        }
+      },
+      {
+        "name": "shellingham",
+        "version": "1.5.4"
+      },
+      {
+        "name": "silero-vad",
+        "version": "6.2.3"
+      },
+      {
+        "name": "six",
+        "version": "1.17.0"
+      },
+      {
+        "name": "smg-grpc-proto",
+        "version": "0.4.14"
+      },
+      {
+        "name": "smg-grpc-servicer",
+        "version": "0.8.0"
+      },
+      {
+        "name": "sniffio",
+        "version": "1.3.1"
+      },
+      {
+        "name": "soundfile",
+        "version": "0.13.1"
+      },
+      {
+        "name": "sox",
+        "version": "1.5.0"
+      },
+      {
+        "name": "soxr",
+        "version": "1.1.0"
+      },
+      {
+        "name": "stack-data",
+        "version": "0.6.3"
+      },
+      {
+        "name": "starlette",
+        "version": "1.6.0"
+      },
+      {
+        "name": "sympy",
+        "version": "1.14.0"
+      },
+      {
+        "name": "tabulate",
+        "version": "0.10.0"
+      },
+      {
+        "name": "threadpoolctl",
+        "version": "3.6.0"
+      },
+      {
+        "name": "tiktoken",
+        "version": "0.13.0"
+      },
+      {
+        "name": "tilelang",
+        "version": "0.1.11"
+      },
+      {
+        "name": "timm",
+        "version": "1.0.16"
+      },
+      {
+        "name": "tokenizers",
+        "version": "0.22.2"
+      },
+      {
+        "name": "tokenspeed-mla",
+        "version": "0.1.8"
+      },
+      {
+        "name": "tokenspeed-triton",
+        "version": "3.8.10.post20260721"
+      },
+      {
+        "name": "tomlkit",
+        "version": "0.15.1"
+      },
+      {
+        "name": "torch",
+        "version": "2.13.0+cu130"
+      },
+      {
+        "name": "torch-einops-utils",
+        "version": "0.1.25"
+      },
+      {
+        "name": "torch_c_dlpack_ext",
+        "version": "0.1.5"
+      },
+      {
+        "name": "torch_memory_saver",
+        "version": "0.0.9.post1"
+      },
+      {
+        "name": "torchao",
+        "version": "0.17.0+cu130"
+      },
+      {
+        "name": "torchaudio",
+        "version": "2.11.0+cu130"
+      },
+      {
+        "name": "torchcodec",
+        "version": "0.16.0+cu130"
+      },
+      {
+        "name": "torchvision",
+        "version": "0.28.0+cu130"
+      },
+      {
+        "name": "tqdm",
+        "version": "4.70.0"
+      },
+      {
+        "name": "traitlets",
+        "version": "5.16.1"
+      },
+      {
+        "name": "transformers",
+        "version": "5.12.1"
+      },
+      {
+        "name": "triton",
+        "version": "3.7.1"
+      },
+      {
+        "name": "typer",
+        "version": "0.27.1"
+      },
+      {
+        "name": "typing-inspection",
+        "version": "0.4.2"
+      },
+      {
+        "name": "typing_extensions",
+        "version": "4.15.0"
+      },
+      {
+        "name": "urllib3",
+        "version": "2.7.0"
+      },
+      {
+        "name": "uvicorn",
+        "version": "0.52.1"
+      },
+      {
+        "name": "uvloop",
+        "version": "0.22.1"
+      },
+      {
+        "name": "vcs-versioning",
+        "version": "2.3.4"
+      },
+      {
+        "name": "virtualenv",
+        "version": "21.14.1"
+      },
+      {
+        "name": "watchfiles",
+        "version": "1.2.0"
+      },
+      {
+        "name": "wcwidth",
+        "version": "0.8.2"
+      },
+      {
+        "name": "wheel",
+        "version": "0.47.0"
+      },
+      {
+        "name": "x-transformers",
+        "version": "2.28.4"
+      },
+      {
+        "name": "xgrammar",
+        "version": "0.2.1"
+      },
+      {
+        "name": "xxhash",
+        "version": "3.8.1"
+      },
+      {
+        "name": "yarl",
+        "version": "1.24.5"
+      },
+      {
+        "name": "z3-solver",
+        "version": "4.15.4.0"
+      },
+      {
+        "name": "zipp",
+        "version": "4.1.0"
+      },
+      {
+        "name": "zstandard",
+        "version": "0.25.0"
+      }
+    ],
+    "dependency_freeze_sha256": "1abe791190cc32a6d7947f8b0e071a75c987788828bc9702bbd369a078a4628d",
+    "artifacts": {
+      "requested_model_id": "openai/whisper-large-v3",
+      "declared_model_revision": null,
+      "dataset_id": "distil-whisper/meanwhile",
+      "dataset_revision": "5a6b431a268523a6603f199d859fc25a24c22900",
+      "evaluation_input_sha256": "1fa20cf63f77d3412d8fb10242b5892737703e068c272623f6d33e62e06212db"
+    },
+    "launch_command": null,
+    "declared_server_config": {
+      "dtype": null,
+      "quantization": null,
+      "attention_backend": null,
+      "mm_attention_backend": null,
+      "cuda_graph": null,
+      "torch_compile": null,
+      "max_running_requests": null,
+      "mem_fraction_static": null
+    },
+    "normalization": {
+      "en": "whisper.normalizers.EnglishTextNormalizer",
+      "zh": "strip zhon+ASCII punctuation, remove spaces, score characters"
+    }
+  },
+  "config": {
+    "host": "127.0.0.1",
+    "port": 23100,
+    "dataset": "meanwhile",
+    "repo_id": "distil-whisper/meanwhile",
+    "split": "test",
+    "lang": "en",
+    "model_path": "openai/whisper-large-v3",
+    "declared_model_revision": null,
+    "dataset_revision": "5a6b431a268523a6603f199d859fc25a24c22900",
+    "num_samples": 64,
+    "expected_num_samples": 64,
+    "concurrencies": [
+      1,
+      8,
+      32
+    ],
+    "repeats": 5,
+    "warmup": true,
+    "stream": false,
+    "declared_server": {
+      "dtype": null,
+      "quantization": null,
+      "attention_backend": null,
+      "mm_attention_backend": null,
+      "cuda_graph": null,
+      "torch_compile": null,
+      "max_running_requests": null,
+      "mem_fraction_static": null
+    },
+    "resource_monitor": {
+      "enabled": true,
+      "gpu_index": 0,
+      "interval_s": 0.2,
+      "gpu_process_pids": []
+    },
+    "profile_events": false,
+    "sample_util": false
+  },
+  "results": [
+    {
+      "concurrency": 1,
+      "repeats": 5,
+      "evaluated": 320,
+      "total": 320,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.0981804325045251,
+        "min": 0.09802800800228637,
+        "max": 0.09821853863008478,
+        "n": 5
+      },
+      "per_sample_wer_max": {
+        "mean": 0.4566929133858268,
+        "min": 0.4566929133858268,
+        "max": 0.4566929133858268,
+        "n": 5
+      },
+      "wall_clock_s": {
+        "mean": 43.30336616002023,
+        "min": 42.12406608089805,
+        "max": 45.35704395361245,
+        "n": 5
+      },
+      "throughput_samples_per_s": {
+        "mean": 1.4788494836119164,
+        "min": 1.411026698861903,
+        "max": 1.5193215174691317,
+        "n": 5
+      },
+      "rtfx": {
+        "mean": 83.9476,
+        "min": 80.098,
+        "max": 86.245,
+        "n": 5
+      },
+      "latency_mean_s": {
+        "mean": 0.6758438412158284,
+        "min": 0.6574822461116128,
+        "max": 0.7079615506809205,
+        "n": 5
+      },
+      "latency_median_s": {
+        "mean": 0.7127016428858042,
+        "min": 0.6996573694050312,
+        "max": 0.7501743016764522,
+        "n": 5
+      },
+      "latency_p95_s": {
+        "mean": 0.8646816795878112,
+        "min": 0.7837007327936589,
+        "max": 0.9027762925252317,
+        "n": 5
+      },
+      "latency_p99_s": {
+        "mean": 0.9028353027366101,
+        "min": 0.8405872723832724,
+        "max": 0.9257641732692719,
+        "n": 5
+      },
+      "rtf_mean": {
+        "mean": 0.012726537998678754,
+        "min": 0.012399461375324664,
+        "max": 0.013398425221128591,
+        "n": 5
+      },
+      "rtf_p95": {
+        "mean": 0.01932,
+        "min": 0.0184,
+        "max": 0.0219,
+        "n": 5
+      },
+      "resources": {
+        "gpu_memory_used_peak_mib": {
+          "per_repeat": [
+            32493.625,
+            32493.625,
+            32493.625,
+            32493.625,
+            32493.625
+          ],
+          "mean": 32493.625,
+          "min": 32493.625,
+          "max": 32493.625
+        },
+        "gpu_memory_used_steady_mib": {
+          "per_repeat": [
+            32493.625,
+            32493.625,
+            32493.625,
+            32493.625,
+            32493.625
+          ],
+          "mean": 32493.625,
+          "min": 32493.625,
+          "max": 32493.625
+        },
+        "gpu_process_memory_peak_mib": null,
+        "power_peak_w": {
+          "per_repeat": [
+            231.329,
+            218.424,
+            218.401,
+            218.505,
+            220.065
+          ],
+          "mean": 221.3448,
+          "min": 218.401,
+          "max": 231.329
+        },
+        "system_cpu_peak_percent": {
+          "per_repeat": [
+            58.7,
+            62.3,
+            13.2,
+            12.4,
+            13.3
+          ],
+          "mean": 31.98,
+          "min": 12.4,
+          "max": 62.3
+        },
+        "gpu_process_cpu_peak_percent": null,
+        "monitor_errors": [
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+        ]
+      },
+      "per_repeat": [
+        {
+          "concurrency": 1,
+          "repeat": 1,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09821853863008478,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 42.12406608089805,
+          "throughput_samples_per_s": 1.5193215174691317,
+          "rtfx": 86.245,
+          "latency_mean_s": 0.6574822461116128,
+          "latency_median_s": 0.6996573694050312,
+          "latency_p95_s": 0.7837007327936589,
+          "latency_p99_s": 0.8405872723832724,
+          "rtf_mean": 0.012399461375324664,
+          "rtf_p95": 0.0189,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 211,
+            "duration_s": 42.397974466905,
+            "gpu_memory_used_mib": {
+              "min": 32493.625,
+              "max": 32493.625,
+              "end": 32493.625,
+              "steady_mean": 32493.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65393.375,
+              "max": 65393.375,
+              "end": 65393.375,
+              "steady_mean": 65393.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 7.0,
+              "max": 87.0,
+              "mean": 74.81516587677726
+            },
+            "power_w": {
+              "min": 165.946,
+              "max": 231.329,
+              "mean": 202.28692890995262
+            },
+            "system_cpu_percent": {
+              "min": 8.1,
+              "max": 58.7,
+              "mean": 11.542654028436019
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 1,
+          "repeat": 2,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09821853863008478,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 45.35704395361245,
+          "throughput_samples_per_s": 1.411026698861903,
+          "rtfx": 80.098,
+          "latency_mean_s": 0.7079615506809205,
+          "latency_median_s": 0.7501743016764522,
+          "latency_p95_s": 0.9027762925252317,
+          "latency_p99_s": 0.9257641732692719,
+          "rtf_mean": 0.013398425221128591,
+          "rtf_p95": 0.0219,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 209,
+            "duration_s": 45.46315695345402,
+            "gpu_memory_used_mib": {
+              "min": 32493.625,
+              "max": 32493.625,
+              "end": 32493.625,
+              "steady_mean": 32493.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65393.375,
+              "max": 65393.375,
+              "end": 65393.375,
+              "steady_mean": 65393.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 1.0,
+              "max": 86.0,
+              "mean": 68.76555023923444
+            },
+            "power_w": {
+              "min": 164.045,
+              "max": 218.424,
+              "mean": 192.34072727272726
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 62.3,
+              "mean": 9.558373205741628
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 1,
+          "repeat": 3,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09802800800228637,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 42.88692329451442,
+          "throughput_samples_per_s": 1.4922963710988826,
+          "rtfx": 84.711,
+          "latency_mean_s": 0.669315544742858,
+          "latency_median_s": 0.7021612972021103,
+          "latency_p95_s": 0.8755647014826536,
+          "latency_p99_s": 0.9189477646537125,
+          "rtf_mean": 0.012588890632590954,
+          "rtf_p95": 0.0187,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 214,
+            "duration_s": 42.99221731349826,
+            "gpu_memory_used_mib": {
+              "min": 32493.625,
+              "max": 32493.625,
+              "end": 32493.625,
+              "steady_mean": 32493.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65393.375,
+              "max": 65393.375,
+              "end": 65393.375,
+              "steady_mean": 65393.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 16.0,
+              "max": 87.0,
+              "mean": 72.89719626168224
+            },
+            "power_w": {
+              "min": 170.47,
+              "max": 218.401,
+              "mean": 197.44884579439253
+            },
+            "system_cpu_percent": {
+              "min": 5.6,
+              "max": 13.2,
+              "mean": 7.361214953271028
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 1,
+          "repeat": 4,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09821853863008478,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 43.08308916538954,
+          "throughput_samples_per_s": 1.4855016490185644,
+          "rtfx": 84.325,
+          "latency_mean_s": 0.6723740946908947,
+          "latency_median_s": 0.710595260374248,
+          "latency_p95_s": 0.8723023885861039,
+          "latency_p99_s": 0.9079957862012088,
+          "rtf_mean": 0.012627261816556212,
+          "rtf_p95": 0.0187,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 215,
+            "duration_s": 43.225293800234795,
+            "gpu_memory_used_mib": {
+              "min": 32493.625,
+              "max": 32493.625,
+              "end": 32493.625,
+              "steady_mean": 32493.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65393.375,
+              "max": 65393.375,
+              "end": 65393.375,
+              "steady_mean": 65393.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 13.0,
+              "max": 88.0,
+              "mean": 71.50232558139535
+            },
+            "power_w": {
+              "min": 161.883,
+              "max": 218.505,
+              "mean": 195.54973023255815
+            },
+            "system_cpu_percent": {
+              "min": 5.0,
+              "max": 12.4,
+              "mean": 6.853023255813954
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 1,
+          "repeat": 5,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09821853863008478,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 43.06570830568671,
+          "throughput_samples_per_s": 1.4861011816111003,
+          "rtfx": 84.359,
+          "latency_mean_s": 0.6720857698528562,
+          "latency_median_s": 0.7009199857711792,
+          "latency_p95_s": 0.8890642825514077,
+          "latency_p99_s": 0.920881517175585,
+          "rtf_mean": 0.01261865094779335,
+          "rtf_p95": 0.0184,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 215,
+            "duration_s": 43.21215341985226,
+            "gpu_memory_used_mib": {
+              "min": 32493.625,
+              "max": 32493.625,
+              "end": 32493.625,
+              "steady_mean": 32493.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65393.375,
+              "max": 65393.375,
+              "end": 65393.375,
+              "steady_mean": 65393.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 3.0,
+              "max": 88.0,
+              "mean": 71.97674418604652
+            },
+            "power_w": {
+              "min": 166.768,
+              "max": 220.065,
+              "mean": 196.6121534883721
+            },
+            "system_cpu_percent": {
+              "min": 5.7,
+              "max": 13.3,
+              "mean": 6.8065116279069775
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        }
+      ]
+    },
+    {
+      "concurrency": 8,
+      "repeats": 5,
+      "evaluated": 320,
+      "total": 320,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.09816137944174526,
+        "min": 0.09802800800228637,
+        "max": 0.098313803943984,
+        "n": 5
+      },
+      "per_sample_wer_max": {
+        "mean": 0.4566929133858268,
+        "min": 0.4566929133858268,
+        "max": 0.4566929133858268,
+        "n": 5
+      },
+      "wall_clock_s": {
+        "mean": 10.67309323363006,
+        "min": 10.204807244241238,
+        "max": 12.370079113170505,
+        "n": 5
+      },
+      "throughput_samples_per_s": {
+        "mean": 6.030530235386116,
+        "min": 5.1737745098055825,
+        "max": 6.271554030196542,
+        "n": 5
+      },
+      "rtfx": {
+        "mean": 342.327,
+        "min": 293.693,
+        "max": 356.009,
+        "n": 5
+      },
+      "latency_mean_s": {
+        "mean": 1.297263634693809,
+        "min": 1.2379791965067852,
+        "max": 1.5090123680129182,
+        "n": 5
+      },
+      "latency_median_s": {
+        "mean": 1.3849382238462566,
+        "min": 1.3129720278084278,
+        "max": 1.6252651484683156,
+        "n": 5
+      },
+      "latency_p95_s": {
+        "mean": 1.6162863743491471,
+        "min": 1.537778428569436,
+        "max": 1.8717569455504417,
+        "n": 5
+      },
+      "latency_p99_s": {
+        "mean": 1.7122512189522383,
+        "min": 1.6305864438228304,
+        "max": 1.9616466258466243,
+        "n": 5
+      },
+      "rtf_mean": {
+        "mean": 0.02429420032533284,
+        "min": 0.023168332858474656,
+        "max": 0.028309998710524115,
+        "n": 5
+      },
+      "rtf_p95": {
+        "mean": 0.03548,
+        "min": 0.0337,
+        "max": 0.0417,
+        "n": 5
+      },
+      "resources": {
+        "gpu_memory_used_peak_mib": {
+          "per_repeat": [
+            32561.625,
+            32561.625,
+            32561.625,
+            32561.625,
+            32591.625
+          ],
+          "mean": 32567.625,
+          "min": 32561.625,
+          "max": 32591.625
+        },
+        "gpu_memory_used_steady_mib": {
+          "per_repeat": [
+            32561.625,
+            32561.625,
+            32561.625,
+            32561.625,
+            32591.625
+          ],
+          "mean": 32567.625,
+          "min": 32561.625,
+          "max": 32591.625
+        },
+        "gpu_process_memory_peak_mib": null,
+        "power_peak_w": {
+          "per_repeat": [
+            262.178,
+            269.133,
+            250.908,
+            268.766,
+            273.756
+          ],
+          "mean": 264.9482,
+          "min": 250.908,
+          "max": 273.756
+        },
+        "system_cpu_peak_percent": {
+          "per_repeat": [
+            14.2,
+            15.4,
+            8.7,
+            12.2,
+            14.3
+          ],
+          "mean": 12.959999999999999,
+          "min": 8.7,
+          "max": 15.4
+        },
+        "gpu_process_cpu_peak_percent": null,
+        "monitor_errors": [
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+        ]
+      },
+      "per_repeat": [
+        {
+          "concurrency": 8,
+          "repeat": 1,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09812327331618557,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.317657079547644,
+          "throughput_samples_per_s": 6.202958627774625,
+          "rtfx": 352.115,
+          "latency_mean_s": 1.2533988654031418,
+          "latency_median_s": 1.3429864821955562,
+          "latency_p95_s": 1.554374914523214,
+          "latency_p99_s": 1.6689471291750666,
+          "rtf_mean": 0.023472217185730358,
+          "rtf_p95": 0.034,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 53,
+            "duration_s": 10.466139048337936,
+            "gpu_memory_used_mib": {
+              "min": 32559.625,
+              "max": 32561.625,
+              "end": 32561.625,
+              "steady_mean": 32561.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65325.375,
+              "max": 65327.375,
+              "end": 65325.375,
+              "steady_mean": 65325.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 29.0,
+              "max": 92.0,
+              "mean": 76.11320754716981
+            },
+            "power_w": {
+              "min": 208.103,
+              "max": 262.178,
+              "mean": 239.30067924528302
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 14.2,
+              "mean": 6.764150943396227
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 8,
+          "repeat": 2,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09821853863008478,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.204807244241238,
+          "throughput_samples_per_s": 6.271554030196542,
+          "rtfx": 356.009,
+          "latency_mean_s": 1.2379791965067852,
+          "latency_median_s": 1.3129720278084278,
+          "latency_p95_s": 1.537778428569436,
+          "latency_p99_s": 1.6491624980606137,
+          "rtf_mean": 0.023168332858474656,
+          "rtf_p95": 0.0342,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 53,
+            "duration_s": 10.346602378413081,
+            "gpu_memory_used_mib": {
+              "min": 32561.625,
+              "max": 32561.625,
+              "end": 32561.625,
+              "steady_mean": 32561.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65325.375,
+              "max": 65325.375,
+              "end": 65325.375,
+              "steady_mean": 65325.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 8.0,
+              "max": 92.0,
+              "mean": 78.43396226415095
+            },
+            "power_w": {
+              "min": 196.147,
+              "max": 269.133,
+              "mean": 244.96241509433963
+            },
+            "system_cpu_percent": {
+              "min": 5.8,
+              "max": 15.4,
+              "mean": 7.071698113207548
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 8,
+          "repeat": 3,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09812327331618557,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 12.370079113170505,
+          "throughput_samples_per_s": 5.1737745098055825,
+          "rtfx": 293.693,
+          "latency_mean_s": 1.5090123680129182,
+          "latency_median_s": 1.6252651484683156,
+          "latency_p95_s": 1.8717569455504417,
+          "latency_p99_s": 1.9616466258466243,
+          "rtf_mean": 0.028309998710524115,
+          "rtf_p95": 0.0417,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 63,
+            "duration_s": 12.513768576085567,
+            "gpu_memory_used_mib": {
+              "min": 32561.625,
+              "max": 32561.625,
+              "end": 32561.625,
+              "steady_mean": 32561.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65325.375,
+              "max": 65325.375,
+              "end": 65325.375,
+              "steady_mean": 65325.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 91.0,
+              "mean": 63.333333333333336
+            },
+            "power_w": {
+              "min": 185.389,
+              "max": 250.908,
+              "mean": 217.25223809523808
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 8.7,
+              "mean": 7.158730158730159
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 8,
+          "repeat": 4,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.098313803943984,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.217502320185304,
+          "throughput_samples_per_s": 6.26376172908364,
+          "rtfx": 355.566,
+          "latency_mean_s": 1.240534420212498,
+          "latency_median_s": 1.3152085775509477,
+          "latency_p95_s": 1.5542257430031896,
+          "latency_p99_s": 1.6305864438228304,
+          "rtf_mean": 0.023213613020214185,
+          "rtf_p95": 0.0338,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 53,
+            "duration_s": 10.366544414311647,
+            "gpu_memory_used_mib": {
+              "min": 32561.625,
+              "max": 32561.625,
+              "end": 32561.625,
+              "steady_mean": 32561.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65325.375,
+              "max": 65325.375,
+              "end": 65325.375,
+              "steady_mean": 65325.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 92.0,
+              "mean": 76.50943396226415
+            },
+            "power_w": {
+              "min": 182.418,
+              "max": 268.766,
+              "mean": 241.72699999999998
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 12.2,
+              "mean": 6.760377358490566
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 8,
+          "repeat": 5,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09802800800228637,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.255420411005616,
+          "throughput_samples_per_s": 6.240602280070188,
+          "rtfx": 354.252,
+          "latency_mean_s": 1.2453933233337011,
+          "latency_median_s": 1.3282588832080364,
+          "latency_p95_s": 1.5632958400994539,
+          "latency_p99_s": 1.6509133978560562,
+          "rtf_mean": 0.023306839851720888,
+          "rtf_p95": 0.0337,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 53,
+            "duration_s": 10.414694787934422,
+            "gpu_memory_used_mib": {
+              "min": 32561.625,
+              "max": 32591.625,
+              "end": 32591.625,
+              "steady_mean": 32591.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65295.375,
+              "max": 65325.375,
+              "end": 65295.375,
+              "steady_mean": 65295.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 92.0,
+              "mean": 80.37735849056604
+            },
+            "power_w": {
+              "min": 182.855,
+              "max": 273.756,
+              "mean": 244.69273584905662
+            },
+            "system_cpu_percent": {
+              "min": 6.0,
+              "max": 14.3,
+              "mean": 6.979245283018868
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        }
+      ]
+    },
+    {
+      "concurrency": 32,
+      "repeats": 5,
+      "evaluated": 320,
+      "total": 320,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.09802800800228637,
+        "min": 0.09793274268838716,
+        "max": 0.09812327331618557,
+        "n": 5
+      },
+      "per_sample_wer_max": {
+        "mean": 0.4566929133858268,
+        "min": 0.4566929133858268,
+        "max": 0.4566929133858268,
+        "n": 5
+      },
+      "wall_clock_s": {
+        "mean": 9.43218683078885,
+        "min": 8.835695991292596,
+        "max": 10.243396438658237,
+        "n": 5
+      },
+      "throughput_samples_per_s": {
+        "mean": 6.811372160465822,
+        "min": 6.24792766571702,
+        "max": 7.243345636050712,
+        "n": 5
+      },
+      "rtfx": {
+        "mean": 386.652,
+        "min": 354.668,
+        "max": 411.173,
+        "n": 5
+      },
+      "latency_mean_s": {
+        "mean": 4.089800465962616,
+        "min": 3.7856351444788743,
+        "max": 4.417507941863732,
+        "n": 5
+      },
+      "latency_median_s": {
+        "mean": 4.262923529557884,
+        "min": 3.922872330993414,
+        "max": 4.797447786666453,
+        "n": 5
+      },
+      "latency_p95_s": {
+        "mean": 5.730451970975844,
+        "min": 5.149691713787615,
+        "max": 6.308018254395573,
+        "n": 5
+      },
+      "latency_p99_s": {
+        "mean": 6.307104581546038,
+        "min": 5.803314014431089,
+        "max": 7.0273207304440435,
+        "n": 5
+      },
+      "rtf_mean": {
+        "mean": 0.07565019072372571,
+        "min": 0.06979577700886683,
+        "max": 0.08196355334076921,
+        "n": 5
+      },
+      "rtf_p95": {
+        "mean": 0.1125,
+        "min": 0.1046,
+        "max": 0.1324,
+        "n": 5
+      },
+      "resources": {
+        "gpu_memory_used_peak_mib": {
+          "per_repeat": [
+            32801.625,
+            32801.625,
+            32801.625,
+            32801.625,
+            32801.625
+          ],
+          "mean": 32801.625,
+          "min": 32801.625,
+          "max": 32801.625
+        },
+        "gpu_memory_used_steady_mib": {
+          "per_repeat": [
+            32801.625,
+            32801.625,
+            32801.625,
+            32801.625,
+            32801.625
+          ],
+          "mean": 32801.625,
+          "min": 32801.625,
+          "max": 32801.625
+        },
+        "gpu_process_memory_peak_mib": null,
+        "power_peak_w": {
+          "per_repeat": [
+            273.436,
+            289.348,
+            284.331,
+            284.701,
+            286.189
+          ],
+          "mean": 283.601,
+          "min": 273.436,
+          "max": 289.348
+        },
+        "system_cpu_peak_percent": {
+          "per_repeat": [
+            11.5,
+            12.6,
+            8.7,
+            9.3,
+            9.1
+          ],
+          "mean": 10.24,
+          "min": 8.7,
+          "max": 12.6
+        },
+        "gpu_process_cpu_peak_percent": null,
+        "monitor_errors": [
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid",
+          "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+        ]
+      },
+      "per_repeat": [
+        {
+          "concurrency": 32,
+          "repeat": 1,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09793274268838716,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.243396438658237,
+          "throughput_samples_per_s": 6.24792766571702,
+          "rtfx": 354.668,
+          "latency_mean_s": 4.4164192624157295,
+          "latency_median_s": 4.797447786666453,
+          "latency_p95_s": 6.147648638207464,
+          "latency_p99_s": 6.577258435282856,
+          "rtf_mean": 0.08158543407988465,
+          "rtf_p95": 0.1324,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 53,
+            "duration_s": 10.35669113881886,
+            "gpu_memory_used_mib": {
+              "min": 32799.625,
+              "max": 32801.625,
+              "end": 32801.625,
+              "steady_mean": 32801.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65085.375,
+              "max": 65087.375,
+              "end": 65085.375,
+              "steady_mean": 65085.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 10.0,
+              "max": 94.0,
+              "mean": 60.867924528301884
+            },
+            "power_w": {
+              "min": 178.94,
+              "max": 273.436,
+              "mean": 225.60930188679245
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 11.5,
+              "mean": 7.19622641509434
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 32,
+          "repeat": 2,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09793274268838716,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 10.035671899095178,
+          "throughput_samples_per_s": 6.377251134103964,
+          "rtfx": 362.009,
+          "latency_mean_s": 4.417507941863732,
+          "latency_median_s": 4.395205097272992,
+          "latency_p95_s": 6.308018254395573,
+          "latency_p99_s": 7.0273207304440435,
+          "rtf_mean": 0.08196355334076921,
+          "rtf_p95": 0.112,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 52,
+            "duration_s": 10.19056299328804,
+            "gpu_memory_used_mib": {
+              "min": 32801.625,
+              "max": 32801.625,
+              "end": 32801.625,
+              "steady_mean": 32801.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65085.375,
+              "max": 65085.375,
+              "end": 65085.375,
+              "steady_mean": 65085.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 94.0,
+              "mean": 62.59615384615385
+            },
+            "power_w": {
+              "min": 111.279,
+              "max": 289.348,
+              "mean": 222.38551923076923
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 12.6,
+              "mean": 6.9788461538461535
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 32,
+          "repeat": 3,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09812327331618557,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 8.903295643627644,
+          "throughput_samples_per_s": 7.188349411468407,
+          "rtfx": 408.051,
+          "latency_mean_s": 3.85637394891819,
+          "latency_median_s": 4.1218144576996565,
+          "latency_p95_s": 5.149691713787615,
+          "latency_p99_s": 6.012932878043502,
+          "rtf_mean": 0.07119512629862013,
+          "rtf_p95": 0.1077,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 46,
+            "duration_s": 9.044533532112837,
+            "gpu_memory_used_mib": {
+              "min": 32801.625,
+              "max": 32801.625,
+              "end": 32801.625,
+              "steady_mean": 32801.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65085.375,
+              "max": 65085.375,
+              "end": 65085.375,
+              "steady_mean": 65085.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 94.0,
+              "mean": 69.02173913043478
+            },
+            "power_w": {
+              "min": 141.804,
+              "max": 284.331,
+              "mean": 242.76382608695653
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 8.7,
+              "mean": 6.6521739130434785
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 32,
+          "repeat": 4,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09812327331618557,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 9.1428741812706,
+          "throughput_samples_per_s": 6.999986954989008,
+          "rtfx": 397.359,
+          "latency_mean_s": 3.9730660321365576,
+          "latency_median_s": 4.077277975156903,
+          "latency_p95_s": 5.598215243127195,
+          "latency_p99_s": 6.1146968495287,
+          "rtf_mean": 0.0737110628904877,
+          "rtf_p95": 0.1046,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 47,
+            "duration_s": 9.290281845256686,
+            "gpu_memory_used_mib": {
+              "min": 32801.625,
+              "max": 32801.625,
+              "end": 32801.625,
+              "steady_mean": 32801.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65085.375,
+              "max": 65085.375,
+              "end": 65085.375,
+              "steady_mean": 65085.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 94.0,
+              "mean": 67.23404255319149
+            },
+            "power_w": {
+              "min": 110.515,
+              "max": 284.701,
+              "mean": 240.5881063829787
+            },
+            "system_cpu_percent": {
+              "min": 0.0,
+              "max": 9.3,
+              "mean": 6.719148936170213
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        },
+        {
+          "concurrency": 32,
+          "repeat": 5,
+          "evaluated": 64,
+          "total": 64,
+          "skipped": 0,
+          "corpus_wer": 0.09802800800228637,
+          "per_sample_wer_max": 0.4566929133858268,
+          "wall_clock_s": 8.835695991292596,
+          "throughput_samples_per_s": 7.243345636050712,
+          "rtfx": 411.173,
+          "latency_mean_s": 3.7856351444788743,
+          "latency_median_s": 3.922872330993414,
+          "latency_p95_s": 5.448686005361375,
+          "latency_p99_s": 5.803314014431089,
+          "rtf_mean": 0.06979577700886683,
+          "rtf_p95": 0.1058,
+          "worker": {},
+          "resources": {
+            "available": true,
+            "sample_interval_s": 0.2,
+            "samples": 46,
+            "duration_s": 8.976352516561747,
+            "gpu_memory_used_mib": {
+              "min": 32801.625,
+              "max": 32801.625,
+              "end": 32801.625,
+              "steady_mean": 32801.625
+            },
+            "gpu_memory_free_mib": {
+              "min": 65085.375,
+              "max": 65085.375,
+              "end": 65085.375,
+              "steady_mean": 65085.375
+            },
+            "gpu_process_memory_mib": null,
+            "gpu_util_percent": {
+              "min": 0.0,
+              "max": 95.0,
+              "mean": 70.65217391304348
+            },
+            "power_w": {
+              "min": 166.74,
+              "max": 286.189,
+              "mean": 245.93691304347826
+            },
+            "system_cpu_percent": {
+              "min": 5.8,
+              "max": 9.1,
+              "mean": 7.010869565217392
+            },
+            "gpu_process_cpu_percent": null,
+            "gpu_process_pids": [],
+            "error": "GPU process metrics require at least one explicit NVML PID; pass --gpu-process-pid"
+          }
+        }
+      ]
+    }
+  ]
+}
