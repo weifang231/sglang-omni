@@ -22,57 +22,11 @@ stage group.
 #### Admission policy
 
 Native admission is the coordinator's in-flight cap (`max_running_requests +
-max_queued_requests` of the generation stage, HTTP 503 when full). A
-deployment can add its own decision behind that cap by naming a factory in
+max_queued_requests` of the generation stage, HTTP 503 when full). A deployment
+can add its own decision behind that cap by naming a factory in
 `PipelineConfig.admission_policy` (YAML `admission_policy:` or CLI
-`--admission_policy module.make_policy`):
-
-```python
-def make_policy(*, config):
-    class Policy:
-        def admit(self, request_id, request) -> bool: ...   # False -> HTTP 429
-        def completed(self, request_id) -> None: ...        # terminal stage(s) succeeded
-        def aborted(self, request_id) -> None: ...          # failed, aborted, or shutdown
-        def close(self) -> None: ...                        # optional
-    return Policy()   # or None to keep native admission
-```
-
-`admit` runs on the coordinator loop for every submit that passed the cap and
-did not set `should_bypass_admission`; it sees the `OmniRequest` and may raise
-`AdmissionRejectedError(reason)` to attach a reason. For each successful admission the coordinator invokes
-one release callback, `completed` or `aborted`, including on submit
-failure, `fail_pending_requests`, and `stop`. Rejections surface at the speech
-endpoints as HTTP 429 `rate_limit_error` / `admission_rejected`, distinct from
-the 503 of a full queue, so a client or load balancer can retry elsewhere.
-The hook decides admission only; it does not schedule, reorder, or preempt.
-
-The existing in-flight cap remains a hard upper bound; the policy can reject
-additional requests within that bound. Request validation and routing resolution
-happen before the policy acquires a request. All callbacks run synchronously and
-must avoid blocking I/O. Returning `False` or raising from `admit` must leave no
-policy-owned reservation; other exceptions propagate as request failures.
-Release callbacks are attempted once. Their exceptions are logged without
-retrying or changing the request result, so policies must clean up their own
-state even when a callback fails. The optional `close` is called at most once.
-
-The policy tracks logical requests, not GPU execution occupancy. An `aborted`
-callback reports coordinator cancellation or failure; it does not acknowledge
-that every stage has stopped executing. A policy requiring execution occupancy
-must obtain separate stage telemetry. Failed or cancelled sends release local
-ownership; delivery may be ambiguous and this callback does not confirm a
-remote rollback. Session submits using `should_bypass_admission` are excluded
-from both policy decisions and lifecycle callbacks.
-
-A deadline-aware policy can read a deployment-defined field such as
-`request.metadata["deadline_monotonic_seconds"]` and compare it with
-`time.monotonic()` inside `admit`. The deployment must populate that field before
-submission, define when the budget starts, and use the coordinator's clock
-domain. This hook does not introduce an HTTP deadline field or propagate a
-client deadline automatically. A monotonic timestamp from another host is not
-a valid value for this example.
-
-A static cap, the kind `max_in_flight` and `--audio_chunking.max_concurrent_long_audio_requests` implement, is the
-smallest policy that fits the contract:
+`--admission_policy module.make_policy`). The factory returns a policy object,
+or `None` to keep native admission:
 
 ```python
 class ConcurrencyCap:
@@ -82,24 +36,47 @@ class ConcurrencyCap:
         self.limit = limit
         self.in_flight: set[str] = set()
 
-    def admit(self, request_id, request) -> bool:
+    def admit(self, request_id, request) -> bool:   # False -> HTTP 429
         if len(self.in_flight) >= self.limit:
             return False
         self.in_flight.add(request_id)
         return True
 
-    def completed(self, request_id) -> None:
+    def completed(self, request_id) -> None:        # terminal stage(s) succeeded
         self.in_flight.discard(request_id)
 
-    aborted = completed
+    aborted = completed                              # failed, aborted, or shutdown
 
 
 def make_policy(*, config):
     return ConcurrencyCap(limit=8)
 ```
 
-Anything that needs more than a count, such as looking at the request or at the time budget left, goes in `admit`
-the same way.
+This static cap is the smallest policy that fits the interface; anything that
+needs more than a count, such as the request itself or the time budget left,
+goes in `admit` the same way. A deadline-aware policy can read a
+deployment-defined field such as `request.metadata["deadline_monotonic_s"]`
+and compare it with `time.monotonic()`; the deployment must fill that field
+before submit, on the coordinator's clock. The hook adds no HTTP deadline field.
+
+The contract:
+
+- `admit(request_id, request)` runs synchronously on the coordinator loop, after
+  the in-flight cap, request validation and routing resolution, for every submit
+  that did not set `should_bypass_admission` (session control operations). It
+  sees the `OmniRequest`. Returning `False`, or raising
+  `AdmissionRejectedError(reason)`, rejects the request before anything reaches
+  a stage; the speech endpoints answer HTTP 429 `rate_limit_error` /
+  `admission_rejected`, distinct from the 503 of a full queue. Any other
+  exception propagates and fails the request.
+- Every admitted request gets exactly one release call: `completed` when its
+  terminal stage(s) succeed, `aborted` on failure, abort, submit error,
+  `fail_pending_requests` or `stop`. A release that raises is logged and not
+  retried. `stop` also calls the optional `close` once.
+- Callbacks must not block. They count logical requests in the coordinator, not
+  GPU occupancy, and `aborted` does not mean every stage has stopped executing.
+- The hook decides admission only; it does not schedule, reorder or preempt, and
+  the in-flight cap stays in force underneath it.
 
 ### Stage
 
