@@ -97,7 +97,7 @@
   },
   "configuration_note": "Small running batch limit and graph ladder shared by all modes; these are not default model capacity benchmarks.",
   "input_note": "First 64 unique Seed-TTS reference recordings, 3.16-7.76 seconds; TTS uses corresponding target texts with a fixed voice reference.",
-  "environment_note": "Reused existing CUDA-13 virtualenv with isolated SGLang v0.5.20 source. See environment.txt for full package versions; some packages differ from upstream pins.",
+  "environment_note": "Reused existing CUDA-13 virtualenv with isolated SGLang v0.5.20 source. See environment.json for full package versions; some packages differ from upstream pins.",
   "reproduction": [
     "Set up a workspace containing models/whisper-large-v3, models/qwen3-tts-base, datasets/current/seed-tts and .venv-sglang with the recorded environment.",
     "Place the scripts under runs/pr1-validation; git archive the recorded base/head commits into sources/base and sources/head, and SGLang v0.5.20 python into sources/sglang.",
