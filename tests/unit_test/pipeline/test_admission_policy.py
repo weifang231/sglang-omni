@@ -495,3 +495,22 @@ def test_policy_without_first_output_is_fine() -> None:
         assert policy.completed_ids == ["req-1"]
 
     asyncio.run(run())
+
+
+def test_rejections_are_logged_as_a_summary_not_per_request(caplog) -> None:
+    async def run() -> None:
+        policy = RecordingPolicy(reject={f"r{i}" for i in range(50)})
+        coordinator, _ = make_coordinator(policy)
+        caplog.set_level("WARNING")
+        for i in range(50):
+            with pytest.raises(AdmissionRejectedError):
+                await coordinator.submit_request(f"r{i}", "hello")
+        lines = [
+            r for r in caplog.records if "Admission policy rejected" in r.getMessage()
+        ]
+        assert (
+            len(lines) == 1
+        )  # the first one; the other 49 are counted for the next report
+        assert coordinator.rejections_since_log == 49
+
+    asyncio.run(run())

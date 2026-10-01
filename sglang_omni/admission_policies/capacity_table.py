@@ -20,8 +20,8 @@ budget: admit iff ``n < capacity`` and ``q(n, remaining) > prices[n]``, where ``
 empirical probability, from the recorded traffic, that a request admitted at occupancy ``n``
 produces its first output within ``remaining - guard_s``; ``prices[n]`` is the average-reward
 value of an execution slot solved from the fitted birth/death chain at the operating arrival
-rate. The remaining budget is ``request.metadata["deadline_monotonic_s"] - time.monotonic()``
-when the deployment sets it, else the profile's ``deadline_s``.
+rate. The remaining budget is ``request.metadata["remaining_budget_s"]`` when the deployment
+sets it (seconds left when the request was handed to the pipeline), else the profile's ``deadline_s``.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEADLINE_KEY = "deadline_monotonic_s"
+BUDGET_KEY = "remaining_budget_s"
 MODES = ("record", "shadow", "apply")
 
 
@@ -355,9 +355,9 @@ class CapacityTablePolicy:
 
     def remaining_budget(self, request: Any, now: float) -> float:
         metadata = getattr(request, "metadata", None) or {}
-        deadline = metadata.get(DEADLINE_KEY)
-        if isinstance(deadline, (int, float)) and math.isfinite(deadline):
-            return float(deadline) - now
+        budget = metadata.get(BUDGET_KEY)
+        if isinstance(budget, (int, float)) and math.isfinite(budget):
+            return float(budget)
         elif self.profile is not None:
             return self.profile.deadline_s
         else:

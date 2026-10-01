@@ -4,6 +4,7 @@
 import asyncio
 import inspect
 import logging
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -121,6 +122,10 @@ class Coordinator(CoordinatorSessions):
         self.admitted: set[str] = set()
         # Admitted request IDs whose first output the policy has been told about.
         self.first_output_seen: set[str] = set()
+        # Policy rejections are summarised, not logged one per request: at high
+        # load they are the common case.
+        self.rejections_since_log = 0
+        self.rejection_log_at: float | None = None
 
         # Control plane
         self.control_plane = CoordinatorControlPlane(
@@ -599,14 +604,31 @@ class Coordinator(CoordinatorSessions):
         else:
             pass
         if not decision:
-            logger.warning(
-                "Rejecting request %s before pipeline submit: admission policy",
-                request_id,
-            )
+            self.log_rejection(request_id)
             raise AdmissionRejectedError()
         else:
             pass
         self.admitted.add(request_id)
+
+    def log_rejection(self, request_id: str, interval_s: float = 10.0) -> None:
+        """One warning per ``interval_s`` with the count, instead of one per rejection."""
+        self.rejections_since_log += 1
+        now = time.monotonic()
+        if (
+            self.rejection_log_at is not None
+            and now - self.rejection_log_at < interval_s
+        ):
+            return
+        else:
+            pass
+        logger.warning(
+            "Admission policy rejected %d request(s) since the last report "
+            "(latest req=%s); rejections answer HTTP 429",
+            self.rejections_since_log,
+            request_id,
+        )
+        self.rejections_since_log = 0
+        self.rejection_log_at = now
 
     def notify_first_output(self, request_id: str) -> None:
         """Tell the policy an admitted request produced its first output (once)."""

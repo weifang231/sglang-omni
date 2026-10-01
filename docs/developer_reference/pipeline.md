@@ -55,9 +55,9 @@ def make_policy(*, config):
 This static cap is the smallest policy that fits the interface; anything that
 needs more than a count, such as the request itself or the time budget left,
 goes in `admit` the same way. A deadline-aware policy can read a
-deployment-defined field such as `request.metadata["deadline_monotonic_s"]`
-and compare it with `time.monotonic()`; the deployment must fill that field
-before submit, on the coordinator's clock. The hook adds no HTTP deadline field.
+deployment-defined field such as `request.metadata["remaining_budget_s"]`
+(seconds of budget left when the request was handed to the pipeline); the
+deployment fills it before submit. The hook adds no HTTP deadline field.
 
 The contract:
 
@@ -95,6 +95,12 @@ admission_policy_options:
   record_path: /var/log/sgl-omni/admission-events.jsonl
 ```
 
+Record under load that reaches the occupancies you want the policy to decide
+about: traffic that stays far below the knee leaves the high-occupancy rows of
+the table with few samples, and `--capacity auto` stops where the samples run
+out. The file grows by one line per admission, first output and completion and
+is never rotated; record for a bounded period, then switch modes.
+
 ```bash
 # 2. fit: per occupancy, first-output latencies, departure rate, q and prices
 python -m sglang_omni.admission_policies.fit_capacity_table admission-events.jsonl \
@@ -113,8 +119,8 @@ of budget is: admit iff `n < capacity` and `q(n, remaining) > prices[n]`, where
 `q` is the recorded share of requests admitted at `n` whose first output came
 within `remaining - guard_s`, and `prices[n]` is the average-reward value of a
 slot solved from the fitted birth/death chain at `arrival_rate_rps`. `remaining`
-is `request.metadata["deadline_monotonic_s"] - time.monotonic()` when the
-deployment sets it, else the profile's `deadline_s`. The profile is specific to
+is `request.metadata["remaining_budget_s"]` when the deployment sets it, else
+the profile's `deadline_s`. The profile is specific to
 the model, hardware class, SLO and operating rate; refit when any of them
 changes (prices alone are re-solved from `arrival_rate_rps`). Single-route ASR
 and TTS deployments are supported. "First output" is the first stream chunk the

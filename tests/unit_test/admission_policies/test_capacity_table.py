@@ -131,7 +131,7 @@ def test_apply_mode_rejects_and_tracks_occupancy(tmp_path) -> None:
     assert policy.snapshot()["in_flight"] == 1
     assert policy.counts == {"admitted": 3, "rejected": 1, "shadow_rejected": 0}
     # deadline from the request wins over the profile's
-    assert policy.admit("late", request(deadline_monotonic_s=clock.now + 0.1)) is False
+    assert policy.admit("late", request(remaining_budget_s=0.1)) is False
     policy.close()
     events = read_events(tmp_path / "events.jsonl")
     assert [e["event"] for e in events] == [
