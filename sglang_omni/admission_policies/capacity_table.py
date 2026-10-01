@@ -31,6 +31,7 @@ import logging
 import math
 import threading
 import time
+from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -147,6 +148,9 @@ class CapacityTableProfile:
         self.deadline_s: float = float(document["deadline_s"])
         self.guard_s: float = float(document.get("guard_s") or 0.0)
         self.features: list[list[dict[str, float]]] = document["features_by_occupancy"]
+        self.first_output_seconds: list[list[float]] = [
+            sorted(row["first_s"] for row in rows) for rows in self.features
+        ]
         self.prices: list[float] = [float(p) for p in document["prices"]]
         rates = document.get("departure_rates")
         self.departure_rates: list[float] | None = (
@@ -249,8 +253,11 @@ class CapacityTableProfile:
     def probability(self, occupancy: int, remaining_s: float) -> float:
         """P[first output within ``remaining_s - guard_s``] for admission at ``occupancy``."""
         budget = remaining_s - self.guard_s
-        rows = self.features[occupancy]
-        return sum(1 for r in rows if r["first_s"] <= budget) / len(rows)
+        if math.isnan(budget):
+            return 0.0
+        else:
+            latencies = self.first_output_seconds[occupancy]
+            return bisect_right(latencies, budget) / len(latencies)
 
     def q_table(self) -> list[float]:
         return [self.probability(n, self.deadline_s) for n in range(self.capacity)]

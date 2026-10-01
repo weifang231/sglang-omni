@@ -96,6 +96,23 @@ def test_invalid_profiles_are_rejected(mutate, message) -> None:
         ct.CapacityTableProfile.from_dict(doc)
 
 
+@pytest.mark.parametrize(
+    "remaining_seconds, expected",
+    [(0.1, 0.0), (0.6, 0.5), (0.85, 0.75), (2.1, 1.0), (float("nan"), 0.0)],
+)
+def test_probability_includes_equal_and_duplicate_latencies(
+    remaining_seconds: float, expected: float
+) -> None:
+    document = profile_document(capacity=1, prices=(0.1,))
+    document["guard_s"] = 0.1
+    document["features_by_occupancy"] = [
+        [{"first_s": seconds} for seconds in (2.0, 0.5, 0.75, 0.5)]
+    ]
+    profile = ct.CapacityTableProfile.from_dict(document)
+    assert profile.probability(0, remaining_seconds) == expected
+    assert profile.document == document
+
+
 def test_decision_rule() -> None:
     profile = ct.CapacityTableProfile.from_dict(profile_document())
     assert profile.q_table() == pytest.approx([1.0, 0.7, 0.4])

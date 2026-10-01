@@ -393,8 +393,11 @@ python -m benchmarks.eval.benchmark_admission_overhead --base-ref <upstream-main
 
 `benchmark_admission_openloop.py` sends requests at a fixed Poisson rate whether or not
 the server keeps up (the closed-loop sweeps above cannot exceed capacity) and scores the
-run by SLO-goodput: requests whose first output arrived within `--slo-s`, per second of
-offered load, plus the 429/503 rejection counts. Use it to find a deployment's knee and
+run by SLO-goodput: requests whose first output arrived within `--slo-s`, divided by
+the time from the first arrival through the last completion, including drain time
+(`total_span_s`), plus the 429/503 rejection counts. `late_rate_of_offered` uses all
+offered requests as its denominator; `late_rate_of_responses` uses successful responses
+with a measured first output (null when there are none). Use it to find a deployment's knee and
 to compare native admission with an admission policy under the same seeded traffic.
 
 ```bash

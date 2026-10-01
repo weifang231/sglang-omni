@@ -5,7 +5,7 @@ The closed-loop sweeps in this directory hold a fixed concurrency, so they canno
 what happens when offered load exceeds capacity: every request still completes, only
 later. This script sends ``--requests`` requests at a fixed Poisson rate regardless of
 how the server keeps up, and reports how many of them produced their first output
-within ``--slo-s`` (attainment), that count per second of offered load (goodput), and
+within ``--slo-s`` (attainment), that count per second including drain time (goodput), and
 how many were rejected with HTTP 429 (admission policy) or 503 (queue full).
 
     python -m benchmarks.eval.benchmark_admission_openloop --task asr --port 8000 \\
@@ -136,7 +136,7 @@ async def run(args) -> dict:
         "requests": args.requests,
         "slo_s": args.slo_s,
         "seed": args.seed,
-        "offered_span_s": round(span, 3),
+        "total_span_s": round(span, 3),
         "ok": statuses.count("ok"),
         "rejected": statuses.count("rejected"),
         "queue_full": statuses.count("queue_full"),
@@ -146,7 +146,10 @@ async def run(args) -> dict:
         "goodput_rps": attained / span if span > 0 else 0.0,
         "first_output_p50_s": percentile(firsts, 0.5),
         "first_output_p95_s": percentile(firsts, 0.95),
-        "late_rate": (len(firsts) - attained) / args.requests,
+        "late_rate_of_offered": (len(firsts) - attained) / args.requests,
+        "late_rate_of_responses": (
+            (len(firsts) - attained) / len(firsts) if firsts else None
+        ),
     }
     return {"summary": summary, "config": vars(args), "requests": records}
 
