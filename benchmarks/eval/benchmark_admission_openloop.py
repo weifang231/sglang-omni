@@ -14,7 +14,8 @@ how many were rejected with HTTP 429 (admission policy) or 503 (queue full).
 
 ``--task asr`` uploads clips to ``/v1/audio/transcriptions`` (``--stream`` measures text
 TTFT over SSE; otherwise first output = completion); ``--task tts`` streams PCM from
-``/v1/audio/speech`` and measures time to first audio. ``--seed`` fixes the arrival
+``/v1/audio/speech`` and measures time to the first streamed chunk, or, with ``--no-stream``,
+the complete response (a completion deadline). ``--seed`` fixes the arrival
 times and the clip order so native and policy runs see the same traffic.
 """
 
@@ -50,8 +51,10 @@ def classify(result) -> str:
 def first_output_s(result, task: str, stream: bool) -> float | None:
     if not result.is_success:
         return None
-    elif task == "tts":
+    elif task == "tts" and stream:
         return result.audio_ttfp_s
+    elif task == "tts":
+        return result.latency_s
     elif stream:
         return result.text_ttft_s
     else:
@@ -79,7 +82,12 @@ async def run(args) -> dict:
             args.model_path, api + "transcriptions", lang=args.lang, stream=args.stream
         )
     else:
-        send = make_tts_send_fn(args.model_path, api + "speech", stream=True)
+        send = make_tts_send_fn(
+            args.model_path,
+            api + "speech",
+            stream=not args.no_stream,
+            response_format="wav",
+        )
     rng = random.Random(args.seed)
     order = [rng.randrange(len(samples)) for _ in range(args.requests)]
     gaps = [rng.expovariate(args.rate) for _ in range(args.requests)]
@@ -102,7 +110,11 @@ async def run(args) -> dict:
                 "sent_s": round(sent, 6),
                 "completed_s": round(time.perf_counter() - started, 6),
                 "status": classify(result),
-                "first_output_s": first_output_s(result, args.task, args.stream),
+                "first_output_s": first_output_s(
+                    result,
+                    args.task,
+                    args.stream if args.task == "asr" else not args.no_stream,
+                ),
                 "latency_s": round(result.latency_s, 6),
                 "error": result.error[:200] if result.error else None,
             }
@@ -112,13 +124,14 @@ async def run(args) -> dict:
             due += gaps[index]
             tasks.append(asyncio.create_task(one(index, due)))
         await asyncio.gather(*tasks)
+    stream_mode = args.stream if args.task == "asr" else not args.no_stream
     statuses = [r["status"] for r in records]
     firsts = [r["first_output_s"] for r in records if r["first_output_s"] is not None]
     attained = sum(1 for f in firsts if f <= args.slo_s)
     span = max(r["completed_s"] for r in records) - min(r["arrival_s"] for r in records)
     summary = {
         "task": args.task,
-        "stream": args.stream,
+        "stream": stream_mode,
         "rate_rps": args.rate,
         "requests": args.requests,
         "slo_s": args.slo_s,
@@ -157,6 +170,11 @@ def main(argv: list[str] | None = None) -> int:
         "--slo-s", type=float, required=True, help="first-output deadline"
     )
     parser.add_argument("--stream", action="store_true", help="asr: SSE and text TTFT")
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="tts: non-streaming, first output = completion",
+    )
     parser.add_argument(
         "--warmup", type=int, default=4, help="sequential untimed requests first"
     )

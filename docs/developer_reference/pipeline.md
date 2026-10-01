@@ -117,7 +117,11 @@ is `request.metadata["deadline_monotonic_s"] - time.monotonic()` when the
 deployment sets it, else the profile's `deadline_s`. The profile is specific to
 the model, hardware class, SLO and operating rate; refit when any of them
 changes (prices alone are re-solved from `arrival_rate_rps`). Single-route ASR
-and TTS deployments are supported; `kind: tts` scores time to first audio.
+and TTS deployments are supported. "First output" is the first stream chunk the
+coordinator forwards, or the completion for non-streaming requests; check what
+that chunk is for your model before choosing the SLO (Qwen3-TTS streams a
+bootstrap chunk within milliseconds of admission, so for it use non-streaming
+requests with a completion deadline, or a different first-output signal).
 
 ### Stage
 
