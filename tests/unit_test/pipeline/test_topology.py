@@ -20,6 +20,7 @@ from sglang_omni.config import (
     compile_logical_processes,
 )
 from sglang_omni.config.manager import ConfigManager
+from sglang_omni.config.schema import PlacementConfig, ProcessConfig
 from sglang_omni.pipeline.replicas import expand_replica_stages
 
 FACTORY = "tests.unit_test.fixtures.pipeline_fakes.dummy_factory"
@@ -292,4 +293,32 @@ def test_colocation_rejects_kv_only_stage_without_total_reserve() -> None:
     )
 
     with pytest.raises(ValueError, match="declared total footprint"):
+        make_topology(config)
+
+
+@pytest.mark.parametrize("devices", [[0], [0, 1]])
+def test_replica_devices_preserve_native_colocation(devices: list[int]) -> None:
+    config = PipelineConfig(
+        model_path="dummy",
+        placement=PlacementConfig(require_memory_fraction_for_colocation=False),
+        stages=[
+            make_stage("encoder", gpu=0, process="encoder", next_stage="thinker"),
+            make_stage("thinker", gpu=0, process="thinker", terminal=True),
+        ],
+        processes={
+            name: ProcessConfig(num_replicas=len(devices), replica_devices=devices)
+            for name in ("encoder", "thinker")
+        },
+    )
+    make_topology(config)
+
+
+def test_same_gpu_process_replicas_still_require_memory_budgets() -> None:
+    config = PipelineConfig(
+        model_path="dummy",
+        placement=PlacementConfig(require_memory_fraction_for_colocation=False),
+        stages=[make_stage("thinker", gpu=0, process="thinker", terminal=True)],
+        processes={"thinker": ProcessConfig(num_replicas=2, replica_devices=[0, 0])},
+    )
+    with pytest.raises(ValueError, match="replica-induced GPU sharing"):
         make_topology(config)

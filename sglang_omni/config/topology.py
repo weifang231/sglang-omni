@@ -452,12 +452,16 @@ def validate_gpu_process_colocation(
             replica_device_stage_names.add(stage.name)
         else:
             pass
-    replica_gpus: set[int] = set()
+    replica_processes: dict[int, dict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
 
     def record(gpu_id: int, process_name: str, stage: StageConfig) -> None:
         gpu_processes[gpu_id].add(process_name)
         if stage.name in replica_device_stage_names:
-            replica_gpus.add(gpu_id)
+            logical_name = instance_to_logical.get(stage.name, stage.name)
+            logical_process = stage_process_name(logical_stage_by_name[logical_name])
+            replica_processes[gpu_id][logical_process].add(process_name)
         else:
             pass
         if stage_lacks_declared_memory_budget(stage):
@@ -489,6 +493,11 @@ def validate_gpu_process_colocation(
 
     require = config.placement.require_memory_fraction_for_colocation
     limit = config.placement.max_total_gpu_memory_fraction_per_gpu
+    replica_gpus = {
+        gpu_id
+        for gpu_id, processes in replica_processes.items()
+        if any(len(instances) > 1 for instances in processes.values())
+    }
     for gpu_id, process_names in gpu_processes.items():
         if len(process_names) <= 1:
             continue
