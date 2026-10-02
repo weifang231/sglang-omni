@@ -305,3 +305,20 @@ def test_audio_to_base64():
     actual = np.frombuffer(pcm_bytes, dtype=np.int16)
     expected = (audio * 32767.0).astype(np.int16)
     assert np.array_equal(expected, actual)
+
+
+@pytest.mark.parametrize("response_format", ["pcm", "pcm16", " PCM16 "])
+@pytest.mark.parametrize("allow_format_fallback", [False, True])
+def test_pcm_aliases_encode_raw_audio(
+    response_format: str, allow_format_fallback: bool
+) -> None:
+    audio = np.array([0.0, 0.25, -0.5, 1.0], dtype=np.float32)
+    encoded, mime = encode_audio(
+        audio,
+        response_format=response_format,
+        sample_rate=44100,
+        allow_format_fallback=allow_format_fallback,
+    )
+    assert encoded == encode_pcm(audio, 44100)
+    assert len(encoded) == 2 * len(audio)
+    assert mime == "audio/pcm"

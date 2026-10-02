@@ -387,6 +387,10 @@ def encode_audio(
         (encoded_bytes, mime_type)
     """
     fmt = response_format.lower().strip()
+    if fmt == "pcm16":
+        fmt = "pcm"
+    else:
+        pass
     arr = to_numpy(audio)
 
     if arr.ndim > 1:
