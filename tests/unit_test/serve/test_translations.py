@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import wave
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from sglang_omni.client import GenerateChunk
+from sglang_omni.admission import QueueFullError
+from sglang_omni.client import ClientError, GenerateChunk
 from sglang_omni.client.types import CompletionResult, GenerateRequest
+from sglang_omni.config.schema import ResolvedAudioChunking
 from sglang_omni.serve import create_app
 
 WHISPER_MODEL = "openai/whisper-large-v3"
@@ -84,6 +89,7 @@ def post_translation(
     stream: bool = False,
     language: str | None = "fr",
     audio: bytes = b"RIFF",
+    endpoint_path: str = "/v1/audio/translations",
 ) -> httpx.Response:
     data: dict[str, str] = {
         "model": model,
@@ -99,7 +105,7 @@ def post_translation(
             base_url="http://testserver",
         ) as client:
             return await client.post(
-                "/v1/audio/translations",
+                endpoint_path,
                 data=data,
                 files={"file": ("sample.wav", audio, "audio/wav")},
             )
@@ -293,3 +299,82 @@ def test_unknown_model_rejected_with_404() -> None:
     assert error["code"] == "model_not_found"
     assert "unknown/model" in error["message"]
     assert backend.requests == []
+
+
+class FailingSpeechToTextClient(RecordingTranslationClient):
+    def __init__(self, error: RuntimeError | ClientError) -> None:
+        super().__init__()
+        self.error = error
+
+    async def abort(self, request_id: str) -> None:
+        pass
+
+    async def completion(
+        self, request: GenerateRequest, *, request_id: str, audio_format: str = "wav"
+    ) -> CompletionResult:
+        raise self.error
+
+    async def generate(
+        self, request: GenerateRequest, request_id: str | None = None
+    ) -> AsyncIterator[GenerateChunk]:
+        await self.completion(request, request_id=request_id or "full-queue")
+        yield GenerateChunk(request_id=request_id or "full-queue", text="")
+
+
+@pytest.mark.parametrize(
+    "error, status_code",
+    [
+        (QueueFullError(), 503),
+        (ClientError(QueueFullError.MESSAGE), 503),
+        (RuntimeError(QueueFullError.MESSAGE), 503),
+        (ClientError("Unsupported language: xx"), 400),
+        (ClientError("backend failed"), 500),
+    ],
+)
+@pytest.mark.parametrize(
+    "endpoint_path, stream, chunked",
+    [
+        ("/v1/audio/transcriptions", False, False),
+        ("/v1/audio/transcriptions", True, False),
+        ("/v1/audio/translations", False, False),
+        ("/v1/audio/translations", True, False),
+        ("/v1/audio/transcriptions", False, True),
+    ],
+)
+def test_speech_to_text_preserves_queue_full_and_other_error_statuses(
+    error: RuntimeError | ClientError,
+    status_code: int,
+    endpoint_path: str,
+    stream: bool,
+    chunked: bool,
+) -> None:
+    backend = FailingSpeechToTextClient(error)
+    app = create_app(
+        backend,
+        model_name=WHISPER_MODEL,
+        architectures=["WhisperForConditionalGeneration"],
+        supports_audio_translation=True,
+        audio_chunking=ResolvedAudioChunking(
+            allow_audio_chunking=chunked,
+            max_audio_clip_s=0.5,
+            min_tail_s=0.1,
+        ),
+    )
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x20" * 16000)
+    response = post_translation(
+        app,
+        endpoint_path=endpoint_path,
+        stream=stream,
+        audio=audio_buffer.getvalue(),
+    )
+    assert response.status_code == status_code
+    assert response.headers["content-type"].startswith("application/json")
+    if status_code == 503:
+        assert QueueFullError.MESSAGE in response.text
+    else:
+        assert str(error) in response.text

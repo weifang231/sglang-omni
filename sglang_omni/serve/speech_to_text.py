@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
+from sglang_omni.admission import QueueFullError
 from sglang_omni.client import (
     Client,
     ClientError,
@@ -257,13 +258,17 @@ async def complete_speech_to_text_request(
     try:
         return await client.completion(gen_req, request_id=request_id)
     except ClientError as exc:
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
@@ -613,14 +618,18 @@ async def create_speech_to_text_streaming_response(
         )
     except ClientError as exc:
         await close_async_iterator_if_supported(chunk_stream)
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         await close_async_iterator_if_supported(chunk_stream)
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass

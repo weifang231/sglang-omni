@@ -12,6 +12,7 @@ from collections.abc import Awaitable
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
+from sglang_omni.admission import QueueFullError
 from sglang_omni.client import Client, ClientError, GenerateRequest
 from sglang_omni.config import ResolvedAudioChunking
 from sglang_omni.serve import speech_to_text
@@ -335,7 +336,9 @@ async def transcribe_planned_upload(
             ),
         )
     except ClientError as exc:
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
@@ -343,7 +346,9 @@ async def transcribe_planned_upload(
     except (HTTPException, asyncio.CancelledError):
         raise
     except Exception as exc:
-        if is_bad_request_error(exc):
+        if QueueFullError.matches(exc):
+            raise HTTPException(status_code=503, detail=QueueFullError.MESSAGE) from exc
+        elif is_bad_request_error(exc):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             pass
