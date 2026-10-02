@@ -187,7 +187,10 @@ class MingStreamingSegmenterScheduler:
         request_id = msg.request_id
         state = self.states.get(request_id)
         if state is None:
-            return
+            state = RequestState(
+                segmenter=SegmenterState(self.config, self.token_count_fn),
+            )
+            self.states[request_id] = state
         else:
             pass
         state.stream_done = True
