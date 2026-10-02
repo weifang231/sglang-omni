@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import numpy as np
+import pytest
 import torch
 
 from sglang_omni.models.ming_omni.components.streaming_talker import (
@@ -205,3 +206,27 @@ def test_streaming_talker_abort_short_circuits_generation():
     results = [m for m in msgs if m.type == "result"]
     assert len(results) == 1
     assert results[0].data.data["aborted"] is True
+
+
+@pytest.mark.parametrize("done_first", [False, True])
+def test_empty_stream_finishes_in_either_message_order(done_first: bool) -> None:
+    scheduler = make_scheduler()
+    request_id = "empty-stream"
+    messages = [
+        IncomingMessage(
+            request_id=request_id,
+            type="new_request",
+            data=StagePayload(request_id=request_id, request=None, data={}),
+        ),
+        IncomingMessage(request_id=request_id, type="stream_done"),
+    ]
+    for message in reversed(messages) if done_first else messages:
+        scheduler.handle_message(message)
+    outputs = []
+    while not scheduler.outbox.empty():
+        outputs.append(scheduler.outbox.get_nowait())
+    results = [message for message in outputs if message.type == "result"]
+    assert len(results) == 1
+    assert request_id not in scheduler.states
+    assert results[0].data.data["audio_chunk_count"] == 0
+    assert not scheduler.talker.calls

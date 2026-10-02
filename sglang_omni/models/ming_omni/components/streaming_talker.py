@@ -230,7 +230,8 @@ class MingStreamingTalkerScheduler:
         with self.states_lock:
             state = self.states.get(request_id)
             if state is None:
-                return
+                state = RequestState()
+                self.states[request_id] = state
             else:
                 pass
             state.stream_done = True
